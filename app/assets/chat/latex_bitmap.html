@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <link rel="stylesheet" href="katex.min.css"/>
+  <style>
+    /* Opaque card — transparent WebView captures become white and kill contrast. */
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--card-bg, #1C1B1F);
+      color: var(--fg, #E8EAED);
+      font: 26px/1.35 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      -webkit-text-size-adjust: 100%;
+    }
+    #root {
+      display: inline-block;
+      box-sizing: border-box;
+      max-width: 520px;
+      min-width: 200px;
+      padding: 16px 18px;
+      background: var(--card-bg, #1C1B1F);
+      color: var(--fg, #E8EAED);
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+    /* Plain canvas text: no card, no padding — the text alone, as in the chat. */
+    /* html paints too: left on the card colour, it showed as a box behind plain text. */
+    html.plain, body.plain, body.plain #root { background: transparent !important; }
+    body.plain #root { padding: 2px; min-width: 0; }
+    body.plain .katex-display { margin: 0.2em 0; overflow: visible; }
+    #root p { margin: 0.4em 0; color: var(--fg, #E8EAED); }
+    #root h1, #root h2, #root h3, #root h4 {
+      margin: 0.5em 0 0.35em;
+      color: var(--fg, #F2F0F5);
+      font-weight: 650;
+      line-height: 1.25;
+    }
+    #root h1 { font-size: 1.15em; }
+    #root h2 { font-size: 1.08em; }
+    #root h3 { font-size: 1.02em; }
+    #root strong { color: var(--fg, #FFFFFF); font-weight: 700; }
+    #root em { color: var(--muted, #D0C4DE); }
+    #root code {
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 0.9em;
+      background: var(--code-bg, #2B2930);
+      color: var(--fg, #E8DEF8);
+      padding: 0.1em 0.35em;
+      border-radius: 4px;
+    }
+    #root pre {
+      background: var(--code-bg, #2B2930);
+      color: var(--fg, #E8DEF8);
+      padding: 10px 12px;
+      border-radius: 8px;
+      overflow-x: auto;
+    }
+    #root ul, #root ol { margin: 0.4em 0; padding-left: 1.35em; }
+    #root li { margin: 0.2em 0; }
+    #root > :first-child { margin-top: 0; }
+    #root > :last-child { margin-bottom: 0; }
+    .katex-display { margin: 0.55em 0; overflow-x: auto; color: var(--fg, #E8EAED); }
+    .katex, .katex * { color: var(--fg, #E8EAED) !important; }
+    .math-error {
+      color: var(--error-fg, #FFB4AB);
+      font-family: ui-monospace, monospace;
+      font-size: 0.85em;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script src="katex.min.js"></script>
+  <script src="mhchem.min.js"></script>
+  <script src="marked.min.js"></script>
+  <script src="sanitize.js"></script>
+  <script>
+    const MATH_OPEN = '\uE000';
+    const MATH_CLOSE = '\uE001';
+    const MATH_ENVS =
+      'align\\*?|equation\\*?|gather\\*?|multline\\*?|eqnarray\\*?|' +
+      'aligned|alignedat|split|cases|matrix|pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix|' +
+      'array|CD|smallmatrix';
+
+    if (window.marked && marked.setOptions) {
+      marked.setOptions({ gfm: true, breaks: true, pedantic: false, headerIds: false, mangle: false });
+    }
+
+    function esc(s) {
+      return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function extractMath(src) {
+      const slots = [];
+      const put = (tex, display) => {
+        const i = slots.length;
+        slots.push({ tex: String(tex).replace(/^\n+|\n+$/g, ''), display: !!display });
+        return MATH_OPEN + i + MATH_CLOSE;
+      };
+      let s = String(src == null ? '' : src);
+      s = s.replace(/```(?:math|latex|tex)\s*\r?\n([\s\S]*?)```/gi, (_, body) => put(body, true));
+      s = s.replace(/\$\$([\s\S]+?)\$\$/g, (_, body) => put(body, true));
+      s = s.replace(/\\\[([\s\S]+?)\\\]/g, (_, body) => put(body, true));
+      s = s.replace(/\\\(([\s\S]+?)\\\)/g, (_, body) => put(body, false));
+      const envRe = new RegExp(
+        '\\\\begin\\{(' + MATH_ENVS + ')\\}([\\s\\S]*?)\\\\end\\{\\1\\}',
+        'g'
+      );
+      s = s.replace(envRe, (full) => put(full, true));
+      s = s.replace(/(^|[^\\$])\$((?:[^$\\\n]|\\.)+?)\$(?!\$)/g, (_, pre, body) => {
+        if (!String(body).trim()) return pre + '$' + body + '$';
+        return pre + put(body, false);
+      });
+      return { text: s, slots };
+    }
+
+    function renderMathSlot(slot) {
+      try {
+        return katex.renderToString(slot.tex, {
+          displayMode: slot.display,
+          throwOnError: false,
+          strict: 'ignore',
+          trust: false, // no \href{javascript:…}, \htmlData and friends
+          output: 'html',
+          macros: {
+            '\\RR': '\\mathbb{R}',
+            '\\NN': '\\mathbb{N}',
+            '\\ZZ': '\\mathbb{Z}',
+            '\\QQ': '\\mathbb{Q}',
+            '\\CC': '\\mathbb{C}'
+          }
+        });
+      } catch (e) {
+        return '<span class="math-error">' + esc(slot.tex) + '</span>';
+      }
+    }
+
+    function markdownToHtml(src) {
+      if (window.marked && typeof marked.parse === 'function') {
+        return marked.parse(src);
+      }
+      return esc(src).replace(/\n/g, '<br/>');
+    }
+
+    function formatBody(text) {
+      const { text: stripped, slots } = extractMath(text);
+      let html = markdownToHtml(stripped);
+      html = html.replace(
+        new RegExp(MATH_OPEN + '(\\d+)' + MATH_CLOSE, 'g'),
+        (_, idx) => {
+          const slot = slots[Number(idx)];
+          return slot ? renderMathSlot(slot) : '';
+        }
+      );
+      return html;
+    }
+
+    /** Called from Android LatexRenderer — returns JSON {w,h}. */
+    function prepareBitmapRender(text) {
+      const root = document.getElementById('root');
+      document.documentElement.classList.remove('plain');
+      root.style.fontSize = '';
+      root.style.maxWidth = '';
+      root.innerHTML = sanitizeHtml(formatBody(text));
+      // Force a layout pass with a sensible width before measuring.
+      root.style.width = '520px';
+      void root.offsetHeight;
+      const w = Math.ceil(Math.max(root.scrollWidth, root.offsetWidth));
+      const h = Math.ceil(Math.max(root.scrollHeight, root.offsetHeight));
+      root.style.width = '';
+      return JSON.stringify({
+        w: Math.min(Math.max(w, 220), 560),
+        h: Math.min(Math.max(h, 48), 1600)
+      });
+    }
+
+    /**
+     * Plain canvas text: no card, shrink-wrapped to the text (wrapping at maxW),
+     * body text at fontPx. Sizes are CSS px; measurePlain() re-reads them once
+     * KaTeX's fonts have loaded.
+     */
+    function preparePlainRender(text, fontPx, maxW) {
+      const root = document.getElementById('root');
+      document.documentElement.classList.add('plain');
+      document.body.classList.add('plain');
+      root.style.width = '';
+      root.style.fontSize = fontPx + 'px';
+      root.style.maxWidth = maxW + 'px';
+      root.innerHTML = sanitizeHtml(formatBody(text));
+      return measurePlain();
+    }
+
+    function measurePlain() {
+      const r = document.getElementById('root').getBoundingClientRect();
+      return JSON.stringify({ w: Math.ceil(r.width), h: Math.ceil(r.height) });
+    }
+  </script>
+</body>
+</html>

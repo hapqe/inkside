@@ -1,0 +1,21 @@
+{
+  "name": "inkside-host",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "dev": "node --watch src/server.mjs",
+    "test": "node scripts/test_bridge.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.280",
+    "@anthropic-ai/sandbox-runtime": "^0.0.78",
+    "express": "^4.21.2",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^6.3.289",
+    "zod": "^4.6.5"
+  },
+  "description": "Inkside host: runs on your computer so the Inkside tablet app can use its agent, files and tools.",
+  "license": "Apache-2.0"
+}

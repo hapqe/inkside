@@ -1,0 +1,128 @@
+/*
+ * Shared styling for Inkside artifacts.
+ *
+ * Linked into every artifact page by the bridge, so a visualisation never has to
+ * ship its own reset, palette, or type scale. The tokens follow the app's
+ * Material surfaces so a figure looks like part of the notebook whether it is
+ * read in chat or placed on the page.
+ *
+ * Placed on a page, an artifact gets a CSS viewport narrower than a phone — about
+ * 220-340px across — so everything here is built for a narrow, portrait-ish box:
+ * single column, no fixed pixel widths, nothing that needs a desktop canvas.
+ */
+
+:root {
+  color-scheme: light dark;
+  --art-bg: #FFFEF8;
+  --art-surface: #FFFFFF;
+  --art-surface-alt: #F4F2EC;
+  --art-outline: #D9D5CC;
+  --art-fg: #1B1B1F;
+  --art-muted: #5F5E66;
+  --art-accent: #3F5AA6;
+  --art-accent-soft: #E6EAF7;
+  /* Plot series. Distinguishable in both themes and for common colour blindness. */
+  --art-series-1: #1F6F7A;
+  --art-series-2: #C0492C;
+  --art-series-3: #7A5AA6;
+  --art-warn: #8A5300;
+  --art-grid: #E6E3DB;
+  --art-space: 12px;
+  --art-radius: 10px;
+  --art-font: ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --art-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --art-bg: #12131A;
+    --art-surface: #1B1C24;
+    --art-surface-alt: #23242E;
+    --art-outline: #3A3B47;
+    --art-fg: #ECEAF2;
+    --art-muted: #A8A6B4;
+    --art-accent: #AEC2FF;
+    --art-accent-soft: #23304F;
+    --art-series-1: #6FD3E0;
+    --art-series-2: #FF9E80;
+    --art-series-3: #C5AEFF;
+    --art-warn: #F2C078;
+    --art-grid: #2A2B36;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--art-bg);
+  color: var(--art-fg);
+  font-family: var(--art-font);
+  font-size: 15px;
+  line-height: 1.45;
+  -webkit-text-size-adjust: 100%;
+}
+
+body { padding: var(--art-space); }
+
+h1, h2, h3 { margin: 0 0 8px; line-height: 1.25; font-weight: 650; }
+h1 { font-size: 1.25rem; }
+h2 { font-size: 1.1rem; }
+h3 { font-size: 1rem; color: var(--art-muted); }
+p { margin: 0 0 10px; }
+small, .art-muted { color: var(--art-muted); font-size: 0.85rem; }
+code, pre { font-family: var(--art-mono); font-size: 0.85em; }
+pre {
+  background: var(--art-surface-alt);
+  border: 1px solid var(--art-outline);
+  border-radius: var(--art-radius);
+  padding: 10px; overflow-x: auto;
+}
+
+/* A figure: the default shape for an artifact. */
+.art-figure {
+  background: var(--art-surface);
+  border: 1px solid var(--art-outline);
+  border-radius: var(--art-radius);
+  padding: var(--art-space);
+  margin: 0 0 var(--art-space);
+}
+.art-caption { color: var(--art-muted); font-size: 0.85rem; margin-top: 6px; }
+
+/* Controls. Touch targets, because this ends up under a stylus on a tablet. */
+.art-controls {
+  display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+  margin: var(--art-space) 0 0;
+}
+.art-control { display: flex; flex-direction: column; gap: 4px; min-width: 140px; flex: 1 1 140px; }
+.art-control > label { font-size: 0.8rem; color: var(--art-muted); }
+.art-controls input[type="range"] { width: 100%; height: 28px; accent-color: var(--art-accent); }
+.art-controls button, .art-btn {
+  font: inherit; font-size: 0.9rem; padding: 8px 14px; min-height: 40px;
+  border-radius: 999px; border: 1px solid var(--art-outline);
+  background: var(--art-surface); color: var(--art-fg);
+}
+.art-btn--primary { background: var(--art-accent-soft); border-color: transparent; }
+.art-controls select, .art-controls input[type="number"] {
+  font: inherit; padding: 8px; min-height: 40px;
+  border-radius: 8px; border: 1px solid var(--art-outline);
+  background: var(--art-surface); color: var(--art-fg);
+}
+
+/* Plots stay inside the box whatever the library does. */
+svg, canvas, img, .js-plotly-plot { max-width: 100%; height: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--art-outline); }
+th { color: var(--art-muted); font-weight: 600; }
+
+.art-row { display: flex; gap: var(--art-space); flex-wrap: wrap; }
+.art-col { flex: 1 1 200px; min-width: 0; }
+.art-note {
+  border-left: 3px solid var(--art-accent);
+  background: var(--art-accent-soft);
+  padding: 8px 10px; border-radius: 0 8px 8px 0; margin: 0 0 var(--art-space);
+}
+
+/* KaTeX is linked in too; keep display maths from overflowing a narrow box. */
+.katex-display { overflow-x: auto; overflow-y: hidden; padding: 2px 0; }

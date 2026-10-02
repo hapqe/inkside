@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="512" height="512">
+  <title>Inkside</title>
+  <rect width="108" height="108" rx="24" fill="#F5F1E8"/>
+  <!-- A handwritten i: a lead-in flick, the stem, a small exit hook; the dot sits a little right of the stem. -->
+  <path d="M44.5,52.5 C47.5,49.5 51,46 53.8,44.6 C55,48.5 54.2,58 53.2,65.5 C52.6,70.8 53.6,75 57.2,74.6 C60.2,74.2 63,71.8 65.2,69"
+        fill="none" stroke="#1B1F3B" stroke-width="6.4" stroke-linecap="round" stroke-linejoin="round"/>
+  <ellipse cx="55" cy="33.6" rx="4.4" ry="4" transform="rotate(-18 55 33.6)" fill="#1B1F3B"/>
+</svg>

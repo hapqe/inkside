@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Material 3 dark (tonal) -->
+    <color name="md_sys_color_surface">#FF13131A</color>
+    <color name="md_sys_color_surface_container">#FF1C1B22</color>
+    <color name="md_sys_color_surface_container_high">#FF26252E</color>
+    <color name="md_sys_color_surface_container_highest">#FF31303A</color>
+    <color name="md_sys_color_on_surface">#FFE6E1E9</color>
+    <color name="md_sys_color_on_surface_variant">#FFCAC4D0</color>
+    <color name="md_sys_color_primary">#FFBAC3FF</color>
+    <color name="md_sys_color_on_primary">#FF1A237E</color>
+    <color name="md_sys_color_primary_container">#FF3F51B5</color>
+    <color name="md_sys_color_on_primary_container">#FFE8EAF6</color>
+    <color name="md_sys_color_secondary_container">#FF47464F</color>
+    <color name="md_sys_color_on_secondary_container">#FFE6E1E9</color>
+    <color name="md_sys_color_outline">#FF938F99</color>
+    <color name="md_sys_color_outline_variant">#FF49454F</color>
+    <color name="md_sys_color_error">#FFFFB4AB</color>
+
+    <!-- legacy aliases used elsewhere -->
+    <color name="bg">@color/md_sys_color_surface</color>
+    <color name="panel">@color/md_sys_color_surface_container</color>
+    <color name="panel_edge">@color/md_sys_color_outline_variant</color>
+    <color name="text">@color/md_sys_color_on_surface</color>
+    <color name="text_dim">@color/md_sys_color_on_surface_variant</color>
+    <color name="accent">@color/md_sys_color_primary</color>
+    <color name="code_bg">#FF0E0E12</color>
+    <color name="ink_blue">#FF4C8DFF</color>
+    <color name="ink_green">#FF3DDB8A</color>
+    <color name="ink_yellow">#FFF5D76E</color>
+    <color name="ink_red">#FFFF6B6B</color>
+    <color name="ink_violet">#FFC792EA</color>
+</resources>

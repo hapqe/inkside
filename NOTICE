@@ -1,0 +1,27 @@
+Inkside
+Copyright 2026 Inkside contributors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product includes third-party software:
+
+App (Android)
+- ML Kit Digital Ink Recognition (Google) — handwriting search. Subject to the ML Kit terms.
+- PdfBox-Android (Tom Roush), a port of Apache PDFBox — Apache License 2.0.
+- AndroidX libraries — Apache License 2.0.
+- Material icons (Google) — Apache License 2.0.
+- KaTeX (Khan Academy and contributors), including its fonts — MIT License / SIL OFL for the fonts.
+- marked — MIT License.
+- mhchem (KaTeX extension) — MIT License.
+
+Host (Node)
+- Claude Agent SDK (Anthropic) — used as a dependency, under Anthropic's terms.
+- Express — MIT License.
+- Sandbox Runtime (@anthropic-ai/sandbox-runtime, Anthropic) — Apache License 2.0.
+- pdf-lib — MIT License.
+- pdf.js (pdfjs-dist, Mozilla) — Apache License 2.0.
+- zod — MIT License.
+- Speech-to-text runs through mlx-whisper (MIT) with the Whisper v3 Turbo weights (MIT, OpenAI),
+  installed on first use through uv.
+
+Each library's own license applies to it.

@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
+  <link rel="stylesheet" href="katex.min.css"/>
+  <style>
+    html, body {
+      margin: 0; padding: 0;
+      height: 100%;
+      background: transparent;
+      color: var(--fg, #E6E1E9);
+      font: 14px/1.55 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      -webkit-user-select: text;
+      user-select: text;
+    }
+    body {
+      display: flex;
+      flex-direction: column;
+      min-height: 100%;
+      box-sizing: border-box;
+    }
+    /* Stick the thread to the bottom when it doesn't fill the pane. */
+    #log {
+      margin-top: auto;
+      width: 100%;
+      max-width: 100%;
+      box-sizing: border-box;
+      padding: 4px 2px 2px;
+      background: transparent;
+    }
+    .msg {
+      margin: 0 0 12px;
+      max-width: 100%;
+      box-sizing: border-box;
+      word-break: break-word;
+      /* Cap to ~half an empty bubble height so short messages stay rounded rects,
+         not circles, and tall messages keep the same corner size. */
+      border-radius: 20px;
+      padding: 10px 16px;
+      border: 0;
+      box-shadow: none;
+    }
+    .msg.you {
+      background: var(--you-bg, #2E1064);
+      /* M3 chat bubble: rounded, with a small corner toward the sender. */
+      border-radius: 20px 20px 6px 20px;
+      /* Own messages: only as wide as their text, capped, against the right edge. */
+      width: fit-content;
+      max-width: 82%;
+      margin-left: auto;
+    }
+    .msg.agent {
+      background: transparent;
+      padding: 2px 2px 10px;
+      margin: 0 0 8px;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+    }
+    .msg.warn {
+      background: var(--warn-bg, #3F3A1F);
+    }
+    .msg.error {
+      background: var(--error-bg, #3F1D24);
+    }
+    .msg.tool {
+      /* Legacy transcripts only — live steps live inside .msg.agent */
+      display: none;
+    }
+    .msg.tool .who { display: none; }
+    .who {
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-weight: 700; margin-bottom: 6px;
+      letter-spacing: 0.04em; font-size: 10px; text-transform: uppercase;
+      color: var(--muted, #A1A1AA);
+    }
+    .msg.you .who { display: none; }
+    .msg.agent .who { display: none; }
+    .who.warn { color: var(--warn-fg, #FBBF24); }
+    .who.error { color: var(--error-fg, #FCA5A5); }
+    .body {
+      color: var(--fg, #F4F4F5);
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 14px;
+    }
+    .msg.agent .body {
+      color: var(--fg, #F4F4F5);
+    }
+    .agent-steps {
+      margin: 0 0 0.6em;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.45;
+      color: var(--muted, #A1A1AA);
+    }
+    .agent-steps:empty { display: none; }
+    .agent-step {
+      padding: 1px 0;
+      color: var(--muted, #A1A1AA);
+    }
+    .agent-answer {
+      color: var(--fg, #F4F4F5);
+    }
+    .agent-answer .activity,
+    .agent-answer .activity-label {
+      color: var(--muted, #A1A1AA);
+    }
+    .body > :first-child { margin-top: 0; }
+
+    /* Pinned status — minimal, theme tokens only (no opaque chrome bar). */
+    #activityBar {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+      display: none; align-items: center; gap: 0.4em;
+      padding: 3px 6px calc(3px + env(safe-area-inset-bottom, 0px));
+      background: transparent;
+      border: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+      line-height: 1.3;
+      color: var(--muted, #A1A1AA);
+      pointer-events: none;
+    }
+    #activityBar.on { display: flex; }
+    #activityBar .activity-pulse {
+      width: 0.35em; height: 0.35em; border-radius: 999px; flex: none;
+      background: var(--primary, #C4B5FD);
+      opacity: 0.85;
+      animation: actPulse 1.3s ease-in-out infinite;
+    }
+    #activityBar .activity-label {
+      color: var(--muted, #A1A1AA);
+      background: none;
+      -webkit-text-fill-color: var(--muted, #A1A1AA);
+      animation: none;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+    }
+    body.has-activity { padding-bottom: 22px; }
+
+    /* In-message working placeholder (same muted language as the bottom bar). */
+    .activity { display: inline-flex; align-items: center; gap: 0.4em; }
+    .activity-pulse {
+      width: 0.35em; height: 0.35em; border-radius: 999px; flex: none;
+      background: var(--primary, #C4B5FD);
+      opacity: 0.85;
+      animation: actPulse 1.3s ease-in-out infinite;
+    }
+    .activity-label {
+      color: var(--muted, #A1A1AA);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+    }
+    @keyframes actPulse { 0%, 100% { transform: scale(0.7); opacity: 0.35; } 50% { transform: scale(1); opacity: 1; } }
+    @media (prefers-reduced-motion: reduce) {
+      .activity-pulse, #activityBar .activity-pulse { animation: none; opacity: 0.7; }
+    }
+    .body > :last-child { margin-bottom: 0; }
+    .body p { margin: 0.45em 0; }
+    .body h1, .body h2, .body h3, .body h4, .body h5, .body h6 {
+      color: var(--fg, #F4F4F5); font-weight: 700; line-height: 1.25; margin: 0.75em 0 0.35em;
+    }
+    .body h1 { font-size: 1.35em; }
+    .body h2 { font-size: 1.2em; }
+    .body h3 { font-size: 1.08em; }
+    .body h4, .body h5, .body h6 { font-size: 1em; }
+    .body strong { font-weight: 700; color: var(--fg, #FAFAFA); }
+    .body em { font-style: italic; }
+    .body del { opacity: 0.75; }
+    .body a { color: var(--primary, #C4B5FD); }
+    .body ul, .body ol { margin: 0.4em 0; padding-left: 1.35em; }
+    .body li { margin: 0.15em 0; }
+    .body blockquote {
+      margin: 0.5em 0; padding: 0.15em 0 0.15em 0.75em;
+      border-left: 2px solid var(--outline, #3F3F46); color: var(--muted, #A1A1AA);
+    }
+    .body hr {
+      border: 0; border-top: 1px solid var(--outline, #3F3F46); margin: 0.75em 0;
+    }
+    .body code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em; background: var(--code-bg, #14141A); padding: 0.1em 0.35em; border-radius: 4px;
+      color: var(--fg, #F4F4F5);
+    }
+    .body pre {
+      background: var(--code-bg, #14141A); border: 1px solid var(--outline, #3F3F46); border-radius: 12px;
+      padding: 10px 12px; overflow-x: auto; -webkit-overflow-scrolling: touch;
+      margin: 0.5em 0; max-width: 100%;
+    }
+    .body pre code {
+      background: transparent; padding: 0; font-size: 0.9em; color: var(--fg, #F4F4F5);
+      white-space: pre;
+    }
+    .body table {
+      border-collapse: collapse; margin: 0.5em 0; font-size: 0.95em;
+      display: block; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch;
+    }
+    .body th, .body td {
+      border: 1px solid var(--outline, #3F3F46); padding: 4px 6px; text-align: left;
+      white-space: nowrap;
+    }
+    .body th { background: var(--agent-bg, #26262F); }
+    .katex-display {
+      margin: 0.65em 0; overflow-x: auto; overflow-y: hidden;
+      -webkit-overflow-scrolling: touch; max-width: 100%;
+      padding: 2px 0;
+    }
+    .katex { font-size: 1.08em; }
+    .math-src { display: inline; }
+    .live-chunk > :first-child { margin-top: 0.45em; }
+    .live-done > .live-chunk:first-child > :first-child { margin-top: 0; }
+    .math-src.display { display: block; }
+    /* Pen hover, like the native buttons. */
+    .artifact-open:hover { background: var(--surface-container-high, #24242C); }
+    a:hover { text-decoration: underline; }
+    .math-error {
+      color: var(--error-fg, #FCA5A5); font-family: ui-monospace, monospace; font-size: 0.9em;
+      white-space: pre-wrap;
+    }
+    .artifact-card {
+      border: 1px solid var(--outline, #3F3F46);
+      border-radius: 16px; background: var(--code-bg, #14141A);
+      padding: 10px 12px 6px; margin: 8px 0;
+      position: relative;
+    }
+    .artifact-frame {
+      width: 100%; height: 280px; min-height: 140px; max-height: 85vh;
+      border: 0; border-radius: 10px; background: var(--surface, #fff);
+      display: block;
+    }
+    .artifact-params { margin-bottom: 6px; }
+    .artifact-actions { display: flex; justify-content: flex-end; margin-top: 4px; }
+    .artifact-open {
+      font-size: 13px; font-weight: 500; min-height: 36px; padding: 0 16px; border-radius: 999px;
+      border: 0;
+      background: var(--highest, #2C2C34);
+      color: var(--fg, #F4F4F5); cursor: pointer;
+      transition: transform 90ms cubic-bezier(0.2, 0, 0, 1);
+    }
+    .artifact-open:active { transform: scale(0.95); }
+    /* New messages land like the app's cards: rise, a touch of overshoot, settle. */
+    @keyframes msg-land {
+      0% { opacity: 0; transform: translateY(10px) scale(0.97); }
+      45% { opacity: 1; }
+      100% { opacity: 1; transform: none; }
+    }
+    .msg.arrive { animation: msg-land 320ms cubic-bezier(0.05, 0.7, 0.1, 1) both; }
+    .msg.you.arrive { transform-origin: 100% 100%; }
+    .msg.agent.arrive { transform-origin: 0 100%; }
+  </style>
+</head>
+<body>
+<div id="activityBar"></div>
+  <div id="log"></div>
+  <script src="katex.min.js"></script>
+  <script src="mhchem.min.js"></script>
+  <script src="marked.min.js"></script>
+  <script src="sanitize.js"></script>
+  <script>
+    const log = document.getElementById('log');
+    const MATH_OPEN = '\uE000';
+    const MATH_CLOSE = '\uE001';
+    const LIVE_RENDER_MS = 80;
+
+    let liveRenderTimer = null;
+    let livePendingText = null;
+    let streamAnchorMsg = null;
+    let streamScrollPinned = false;
+
+    /** Tell Android when a touch begins on a horizontally scrollable region (code/tables/math). */
+    function chatElCanScrollX(start) {
+      let el = start;
+      while (el && el !== document.body && el !== document.documentElement) {
+        if (el.nodeType === 1) {
+          if (el.scrollWidth > el.clientWidth + 2) {
+            const ox = window.getComputedStyle(el).overflowX;
+            if (ox === 'auto' || ox === 'scroll' || ox === 'overlay') return true;
+          }
+        }
+        el = el.parentElement;
+      }
+      return false;
+    }
+    document.addEventListener('touchstart', function (e) {
+      const can = e.target ? chatElCanScrollX(e.target) : false;
+      try {
+        if (window.AndroidBridge && AndroidBridge.reportChatTouchScrollX) {
+          AndroidBridge.reportChatTouchScrollX(can);
+        }
+      } catch (err) {}
+    }, { capture: true, passive: true });
+
+    // ---- Selection → markdown/TeX source, reported to Android ("Drag to canvas") ----
+
+    function mathRoot(node) {
+      let el = node && node.nodeType === 1 ? node : (node ? node.parentElement : null);
+      return el && el.closest ? el.closest('.math-src') : null;
+    }
+
+    function nodeToSource(node) {
+      if (node.nodeType === 3) return node.nodeValue;
+      if (node.nodeType !== 1) return '';
+      const el = node;
+      // Plain text for the canvas: no LaTeX delimiters, no markdown markup. A formula
+      // is written out as its TeX (readable, and nothing tries to render it).
+      if (el.classList && el.classList.contains('math-src')) {
+        const tex = (el.getAttribute('data-tex') || '').trim();
+        return el.classList.contains('display') ? '\n' + tex + '\n' : tex;
+      }
+      const tag = el.tagName.toLowerCase();
+      if (tag === 'br') return '\n';
+      if (tag === 'pre') return '\n' + el.textContent.replace(/\n$/, '') + '\n';
+      let inner = '';
+      el.childNodes.forEach(c => { inner += nodeToSource(c); });
+      switch (tag) {
+        case 'h1': case 'h2': case 'h3': case 'h4': case 'h5': case 'h6':
+          return '\n' + inner + '\n';
+        case 'li': {
+          const ol = el.parentElement && el.parentElement.tagName.toLowerCase() === 'ol';
+          return (ol ? '1. ' : '- ') + inner.trim() + '\n';
+        }
+        case 'ul': case 'ol': return '\n' + inner + '\n';
+        case 'p': case 'div': case 'blockquote': case 'tr':
+          return inner + '\n\n';
+        case 'td': case 'th': return inner + '  ';
+        default: return inner;
+      }
+    }
+
+    function selectionSource() {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || sel.rangeCount === 0) return '';
+      const range = sel.getRangeAt(0).cloneRange();
+      // Never split a formula: widen to whole math elements at either end.
+      const ms = mathRoot(range.startContainer);
+      if (ms) range.setStartBefore(ms);
+      const me = mathRoot(range.endContainer);
+      if (me) range.setEndAfter(me);
+      const div = document.createElement('div');
+      div.appendChild(range.cloneContents());
+      // Any formula fully inside the clone still carries data-tex.
+      return nodeToSource(div).replace(/\n{3,}/g, '\n\n').trim();
+    }
+
+    let selReportTimer = null;
+    function reportSelection() {
+      selReportTimer = null;
+      if (!window.AndroidBridge || !AndroidBridge.onChatSelection) return;
+      const src = selectionSource();
+      if (!src) { AndroidBridge.onChatSelection('', 0, 0); return; }
+      const rects = window.getSelection().getRangeAt(0).getClientRects();
+      const last = rects.length ? rects[rects.length - 1] : window.getSelection().getRangeAt(0).getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      AndroidBridge.onChatSelection(src, last.right * dpr, last.bottom * dpr);
+    }
+    function scheduleSelectionReport() {
+      if (selReportTimer) clearTimeout(selReportTimer);
+      selReportTimer = setTimeout(reportSelection, 180);
+    }
+    document.addEventListener('selectionchange', scheduleSelectionReport);
+    window.addEventListener('scroll', scheduleSelectionReport, { passive: true });
+
+    if (window.marked && marked.setOptions) {
+      marked.setOptions({
+        gfm: true,
+        breaks: true,
+        pedantic: false,
+        headerIds: false,
+        mangle: false
+      });
+    }
+
+    function esc(s) {
+      return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    const MATH_ENVS =
+      'align\\*?|equation\\*?|gather\\*?|multline\\*?|eqnarray\\*?|' +
+      'aligned|alignedat|split|cases|matrix|pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix|' +
+      'array|CD|smallmatrix';
+
+    /** Pull math out before markdown so _, *, # inside TeX stay intact. */
+    function extractMath(src) {
+      const slots = [];
+      const put = (tex, display) => {
+        const i = slots.length;
+        slots.push({ tex: String(tex).replace(/^\n+|\n+$/g, ''), display: !!display });
+        return MATH_OPEN + i + MATH_CLOSE;
+      };
+
+      let s = String(src == null ? '' : src);
+
+      s = s.replace(/```(?:math|latex|tex)\s*\r?\n([\s\S]*?)```/gi, (_, body) => put(body, true));
+      s = s.replace(/\$\$([\s\S]+?)\$\$/g, (_, body) => put(body, true));
+      s = s.replace(/\\\[([\s\S]+?)\\\]/g, (_, body) => put(body, true));
+      s = s.replace(/\\\(([\s\S]+?)\\\)/g, (_, body) => put(body, false));
+
+      const envRe = new RegExp(
+        '\\\\begin\\{(' + MATH_ENVS + ')\\}([\\s\\S]*?)\\\\end\\{\\1\\}',
+        'g'
+      );
+      s = s.replace(envRe, (full) => put(full, true));
+
+      s = s.replace(/(^|[^\\$])\$((?:[^$\\\n]|\\.)+?)\$(?!\$)/g, (_, pre, body) => {
+        if (!String(body).trim()) return pre + '$' + body + '$';
+        return pre + put(body, false);
+      });
+
+      return { text: s, slots };
+    }
+
+    /** Rendered math keeps its TeX so a selection can be turned back into source. */
+    function renderMathSlot(slot) {
+      // A span even for display math: a div would break out of marked's <p>.
+      const tag = 'span';
+      return '<' + tag + ' class="math-src' + (slot.display ? ' display' : '') +
+        '" data-tex="' + esc(slot.tex) + '">' + renderMathHtml(slot) + '</' + tag + '>';
+    }
+
+    function renderMathHtml(slot) {
+      try {
+        return katex.renderToString(slot.tex, {
+          displayMode: slot.display,
+          throwOnError: false,
+          strict: 'ignore',
+          trust: false, // no \href{javascript:…}, \htmlData and friends from chat text
+          output: 'html',
+          macros: {
+            '\\RR': '\\mathbb{R}',
+            '\\NN': '\\mathbb{N}',
+            '\\ZZ': '\\mathbb{Z}',
+            '\\QQ': '\\mathbb{Q}',
+            '\\CC': '\\mathbb{C}'
+          }
+        });
+      } catch (e) {
+        return '<span class="math-error">' + esc(slot.tex) + '</span>';
+      }
+    }
+
+    function markdownToHtml(src) {
+      if (window.marked && typeof marked.parse === 'function') {
+        return marked.parse(src);
+      }
+      return esc(src).replace(/\n/g, '<br/>');
+    }
+
+    function expandEmbeds(src) {
+      return String(src)
+        .replace(/\[\[(?:viz|artifact):([^\]]+)\]\]/g, (_, path) =>
+          '<div class="artifact-card" data-artifact="' + esc(path.trim()) + '"></div>')
+        .replace(/\[\[script:[^\]]+\]\]/g, '');
+    }
+
+    function formatBody(text) {
+      const { text: stripped, slots } = extractMath(text);
+      let html = markdownToHtml(expandEmbeds(stripped));
+      html = html.replace(
+        new RegExp(MATH_OPEN + '(\\d+)' + MATH_CLOSE, 'g'),
+        (_, idx) => {
+          const slot = slots[Number(idx)];
+          if (!slot) return '';
+          return renderMathSlot(slot);
+        }
+      );
+      return html;
+    }
+
+    function hydrateCards(root) {
+      root.querySelectorAll('.artifact-card[data-artifact]').forEach(el => {
+        if (!el.querySelector('.artifact-frame')) {
+          const path = el.getAttribute('data-artifact') || '';
+          el.innerHTML = buildArtifactShell(path);
+        } else {
+          const handle = el.querySelector('.artifact-resize');
+          if (handle) handle.remove();
+        }
+      });
+    }
+
+    function formatBodyAndHydrate(text) {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = sanitizeHtml(formatBody(text));
+      hydrateCards(tmp);
+      return tmp.innerHTML;
+    }
+
+    function whoLabel(who) {
+      if (who === 'you') return 'You';
+      if (who === 'agent') return 'Agent';
+      if (who === 'tool') return 'Tool';
+      if (who === 'warn') return 'Note';
+      if (who === 'error') return 'Error';
+      if (who === 'system') return 'System';
+      return who;
+    }
+
+    function pinStreamToMessage(msgEl) {
+      if (!msgEl) return;
+      if (streamScrollPinned && streamAnchorMsg === msgEl) return;
+      streamAnchorMsg = msgEl;
+      streamScrollPinned = true;
+      const y = msgEl.getBoundingClientRect().top + window.pageYOffset - 10;
+      window.scrollTo(0, Math.max(0, y));
+    }
+
+    function resetStreamScroll() {
+      streamAnchorMsg = null;
+      streamScrollPinned = false;
+    }
+
+    function findLastAgentMsg() {
+      const msgs = log.querySelectorAll('.msg');
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].getAttribute('data-who') === 'agent') return msgs[i];
+      }
+      return null;
+    }
+
+    function cleanStepLabel(text) {
+      return String(text == null ? '' : text).replace(/^[✓✗]\s*/, '').trim();
+    }
+
+    function ensureAgentStructure(msg) {
+      if (!msg) return null;
+      let body = msg.querySelector('.body');
+      if (!body) {
+        body = document.createElement('div');
+        body.className = 'body';
+        msg.appendChild(body);
+      }
+      let steps = body.querySelector('.agent-steps');
+      let answer = body.querySelector('.agent-answer');
+      if (!steps || !answer) {
+        const prior = body.innerHTML;
+        body.innerHTML = '';
+        steps = document.createElement('div');
+        steps.className = 'agent-steps';
+        answer = document.createElement('div');
+        answer.className = 'agent-answer';
+        if (prior && !/agent-steps|agent-answer/.test(prior)) {
+          answer.innerHTML = prior;
+        }
+        body.appendChild(steps);
+        body.appendChild(answer);
+      }
+      return { body: body, steps: steps, answer: answer };
+    }
+
+    function setAgentAnswerContent(answerEl, text, opts) {
+      opts = opts || {};
+      const raw = text == null ? '' : String(text);
+      const act = activityHtml(raw);
+      answerEl.style.whiteSpace = '';
+      if (act != null) {
+        answerEl.innerHTML = act;
+        return;
+      }
+      if (opts.live) {
+        renderLiveChunked(answerEl, raw);
+        return;
+      }
+      answerEl._live = null;
+      answerEl.innerHTML = formatBodyAndHydrate(raw);
+    }
+
+    /**
+     * Where streamed text can be cut into "finished" and "still being written": the
+     * last blank line that is not inside an open ``` fence or $$ … $$ block.
+     */
+    function stableSplit(raw) {
+      let fence = false, display = false, lastSafe = 0;
+      for (let i = 0; i < raw.length; i++) {
+        if (raw.startsWith('```', i)) { fence = !fence; i += 2; continue; }
+        if (!fence && raw.startsWith('$$', i)) { display = !display; i += 1; continue; }
+        if (!fence && !display && raw[i] === '\n' && raw[i + 1] === '\n') lastSafe = i + 2;
+      }
+      return lastSafe;
+    }
+
+    /**
+     * Live answer with maths already typeset: finished paragraphs are rendered once,
+     * as they complete, and appended (never re-rendered); only the paragraph still
+     * being written is shown as plain text until its blank line arrives.
+     */
+    function renderLiveChunked(answerEl, raw) {
+      let st = answerEl._live;
+      if (!st || !answerEl.contains(st.done)) {
+        answerEl.innerHTML = '';
+        answerEl.style.whiteSpace = '';
+        st = { src: '', done: document.createElement('div'), tail: document.createElement('div') };
+        st.done.className = 'live-done';
+        st.tail.className = 'live-tail';
+        st.tail.style.whiteSpace = 'pre-wrap';
+        answerEl.appendChild(st.done);
+        answerEl.appendChild(st.tail);
+        answerEl._live = st;
+      }
+      const cut = stableSplit(raw);
+      const stable = raw.slice(0, cut);
+      if (stable !== st.src) {
+        if (stable.startsWith(st.src)) {
+          // Only the newly finished part is rendered — a chunk per paragraph.
+          const chunk = document.createElement('div');
+          chunk.className = 'live-chunk';
+          chunk.innerHTML = formatBodyAndHydrate(stable.slice(st.src.length));
+          st.done.appendChild(chunk);
+        } else {
+          st.done.innerHTML = formatBodyAndHydrate(stable);
+        }
+        st.src = stable;
+      }
+      st.tail.textContent = raw.slice(cut);
+    }
+
+    function setAgentAnswerContentSynced(answerEl, text, opts) {
+      setAgentAnswerContent(answerEl, text, opts);
+      if (typeof syncActivityBar === 'function') syncActivityBar();
+    }
+
+    function appendMessage(who, text, opts) {
+      opts = opts || {};
+      if (who === 'tool') {
+        upsertAgentStep(text, opts.status || 'running');
+        return findLastAgentMsg();
+      }
+      const wrap = document.createElement('div');
+      wrap.className = 'msg ' + who + (opts && opts.restore ? '' : ' arrive');
+      wrap.setAttribute('data-who', who);
+      const w = document.createElement('div');
+      w.className = 'who' + (who === 'warn' || who === 'error' ? ' ' + who : '');
+      w.textContent = whoLabel(who);
+      const b = document.createElement('div');
+      b.className = 'body';
+      wrap.appendChild(w);
+      wrap.appendChild(b);
+      log.appendChild(wrap);
+      if (who === 'agent') {
+        const parts = ensureAgentStructure(wrap);
+        if (opts.steps && opts.steps.length) {
+          opts.steps.forEach(function (s) {
+            const row = document.createElement('div');
+            row.className = 'agent-step';
+            row.textContent = cleanStepLabel(s);
+            parts.steps.appendChild(row);
+          });
+        }
+        setAgentAnswerContent(parts.answer, text, {});
+        if (!opts.restore) syncActivityBar();
+      } else {
+        b.innerHTML = formatBodyAndHydrate(text);
+      }
+      if (opts.restore) {
+        /* batch restore — caller scrolls once */
+      } else if (who === 'agent' || opts.pinStream) {
+        resetStreamScroll();
+        pinStreamToMessage(wrap);
+      } else if (opts.scroll !== false) {
+        window.scrollTo(0, document.body.scrollHeight);
+      }
+      return wrap;
+    }
+
+    /**
+     * Status lines arrive as "… using grep". Render them as an animated activity
+     * row rather than prose, so it is obvious the agent is working when no text
+     * is coming through.
+     */
+    function activityHtml(text) {
+      const m = /^\u2026\s*(.*)$/.exec(String(text == null ? '' : text).trim());
+      if (!m) return null;
+      const label = m[1].replace(/[.\u2026]+$/, '').trim() || 'working';
+      return '<span class="activity">' +
+        '<span class="activity-pulse"></span>' +
+        '<span class="activity-label">' + esc(label) + '</span>' +
+        '</span>';
+    }
+
+    /** Add/update a tool step inside the current agent message (same muted style). */
+    function upsertAgentStep(text, status) {
+      const label = cleanStepLabel(text);
+      if (!label) return;
+      let msg = findLastAgentMsg();
+      if (!msg) {
+        msg = appendMessage('agent', '', { pinStream: true, scroll: false });
+      }
+      const parts = ensureAgentStructure(msg);
+      const rows = parts.steps.querySelectorAll('.agent-step');
+      const running = status === 'running' || status == null || status === '';
+      if (running && rows.length) {
+        const last = rows[rows.length - 1];
+        if (last.getAttribute('data-running') === '1') {
+          last.textContent = label;
+          return;
+        }
+      }
+      if (!running && rows.length) {
+        const last = rows[rows.length - 1];
+        if (last.getAttribute('data-running') === '1') {
+          last.textContent = label;
+          last.removeAttribute('data-running');
+          return;
+        }
+        // Same tool label already shown — ignore duplicate completed events.
+        if (last.textContent === label) return;
+      }
+      const row = document.createElement('div');
+      row.className = 'agent-step';
+      row.textContent = label;
+      if (running) row.setAttribute('data-running', '1');
+      parts.steps.appendChild(row);
+      pinStreamToMessage(msg);
+    }
+
+    /** The agent's current step, independent of whatever the bubble is showing. */
+    let activityLabelText = '';
+
+    /** True while the last agent bubble is itself the "… thinking" placeholder. */
+    function lastAgentShowsActivity() {
+      const msg = findLastAgentMsg();
+      if (!msg) return false;
+      const answer = msg.querySelector('.agent-answer');
+      return !!(answer && answer.querySelector('.activity'));
+    }
+
+    /**
+     * Only one status line at a time: while the bubble still shows the placeholder
+     * (first status of a turn) the pinned bar stays hidden, otherwise the same
+     * "thinking" / "reading" would be on screen twice.
+     */
+    function syncActivityBar() {
+      const bar = document.getElementById('activityBar');
+      if (!bar) return;
+      if (activityLabelText && lastAgentShowsActivity()) {
+        // Keep the in-bubble placeholder current instead of adding a second line.
+        const label = findLastAgentMsg().querySelector('.agent-answer .activity-label');
+        if (label && label.textContent !== activityLabelText) label.textContent = activityLabelText;
+      }
+      if (!activityLabelText || lastAgentShowsActivity()) {
+        bar.classList.remove('on');
+        document.body.classList.remove('has-activity');
+        return;
+      }
+      bar.innerHTML = '<span class="activity-pulse"></span>' +
+        '<span class="activity-label">' + esc(activityLabelText) + '</span>';
+      bar.classList.add('on');
+      document.body.classList.add('has-activity');
+    }
+
+    function setAgentActivity(text) {
+      const label = String(text == null ? '' : text)
+        .replace(/^\u2026\s*/, '').replace(/[.\u2026]+$/, '').trim();
+      if (!label) { clearAgentActivity(); return; }
+      activityLabelText = label;
+      syncActivityBar();
+    }
+
+    function clearAgentActivity() {
+      activityLabelText = '';
+      const bar = document.getElementById('activityBar');
+      if (!bar) return;
+      bar.classList.remove('on');
+      bar.innerHTML = '';
+      document.body.classList.remove('has-activity');
+    }
+
+    function setAll(raw) {
+      resetStreamScroll();
+      if (liveRenderTimer) {
+        clearTimeout(liveRenderTimer);
+        liveRenderTimer = null;
+      }
+      livePendingText = null;
+      log.innerHTML = '';
+      if (!raw) return;
+      const parts = String(raw).split(/\n(?=(?:you|agent|tool|warn|error|system):)/);
+      let pendingSteps = [];
+      let pendingAnswer = null;
+      let haveAgent = false;
+
+      function flushAgent() {
+        if (!haveAgent && pendingSteps.length === 0) return;
+        appendMessage('agent', pendingAnswer == null ? '' : pendingAnswer, {
+          restore: true,
+          steps: pendingSteps.slice()
+        });
+        pendingSteps = [];
+        pendingAnswer = null;
+        haveAgent = false;
+      }
+
+      for (const part of parts) {
+        const m = part.match(/^(you|agent|tool|warn|error|system):\n?([\s\S]*)$/);
+        const who = m ? m[1] : 'agent';
+        const text = m ? m[2].replace(/\n$/, '') : part.trim();
+        if (!m && !text) continue;
+        if (who === 'tool') {
+          const label = cleanStepLabel(text);
+          if (label) pendingSteps.push(label);
+          haveAgent = true;
+          continue;
+        }
+        if (who === 'agent') {
+          haveAgent = true;
+          // Keep the latest non-empty prose; activity placeholders yield to real text.
+          const isAct = /^\u2026/.test(String(text).trim());
+          if (!isAct && String(text).trim()) pendingAnswer = text;
+          else if (pendingAnswer == null) pendingAnswer = text;
+          continue;
+        }
+        flushAgent();
+        appendMessage(who, text, { restore: true });
+      }
+      flushAgent();
+      syncActivityBar();
+      window.scrollTo(0, document.body.scrollHeight);
+    }
+
+    function replaceLastTool(text) {
+      upsertAgentStep(text, 'completed');
+    }
+
+    function replaceLastAgent(text) {
+      if (liveRenderTimer) {
+        clearTimeout(liveRenderTimer);
+        liveRenderTimer = null;
+      }
+      livePendingText = null;
+      let msg = findLastAgentMsg();
+      if (!msg) {
+        appendMessage('agent', text);
+        resetStreamScroll();
+        return;
+      }
+      const parts = ensureAgentStructure(msg);
+      setAgentAnswerContentSynced(parts.answer, text, {});
+      if (!streamScrollPinned) pinStreamToMessage(msg);
+      resetStreamScroll();
+    }
+
+    function applyLiveAgentHtml(text) {
+      let msg = findLastAgentMsg();
+      if (!msg) {
+        msg = appendMessage('agent', text, { pinStream: true, scroll: false });
+        return;
+      }
+      const parts = ensureAgentStructure(msg);
+      setAgentAnswerContentSynced(parts.answer, text, { live: activityHtml(text) == null });
+      pinStreamToMessage(msg);
+    }
+
+    /** Live stream: throttled plain text; scroll pins to response start. */
+    function updateLastAgentLive(text) {
+      livePendingText = text;
+      if (liveRenderTimer) return;
+      liveRenderTimer = setTimeout(() => {
+        liveRenderTimer = null;
+        const t = livePendingText;
+        if (t == null) return;
+        applyLiveAgentHtml(t);
+      }, LIVE_RENDER_MS);
+    }
+
+    const ARTIFACT_FRAME_HEIGHT = 280;
+
+    function buildArtifactShell(path) {
+      const base = window.AndroidBridge ? AndroidBridge.artifactUrl(path || '') : '';
+      return '<div class="artifact-params"></div>' +
+        '<iframe class="artifact-frame" data-artifact-path="' + esc(path) +
+        '" style="height:' + ARTIFACT_FRAME_HEIGHT + 'px" src="' + esc(base) + '"></iframe>' +
+        '<div class="artifact-actions">' +
+        '<button class="artifact-open" data-open-artifact="' + esc(path) +
+        '">Open</button></div>';
+    }
+
+    // Open the visualization in the editor panel (rendered .viz view, never source).
+    document.addEventListener('click', function (e) {
+      const btn = e.target && e.target.closest ? e.target.closest('.artifact-open') : null;
+      if (!btn) return;
+      const path = btn.getAttribute('data-open-artifact') || '';
+      if (!path || !window.AndroidBridge || !AndroidBridge.openArtifact) return;
+      AndroidBridge.openArtifact(path);
+      btn.textContent = 'Opened';
+      setTimeout(function () { btn.textContent = 'Open'; }, 1600);
+    });
+
+    function refreshArtifactFrames() {
+      document.querySelectorAll('.artifact-frame').forEach(frame => {
+        const path = frame.getAttribute('data-artifact-path');
+        const base = window.AndroidBridge ? AndroidBridge.artifactUrl(path || '') : frame.src.split('?')[0];
+        frame.src = base + (base.indexOf('?') >= 0 ? '&' : '?') + 't=' + Date.now();
+      });
+    }
+
+    function appendArtifactCard(path) {
+      const wrap = document.createElement('div');
+      wrap.className = 'msg agent arrive';
+      wrap.setAttribute('data-who', 'agent');
+      wrap.innerHTML = '<div class="who">Viz</div><div class="body"><div class="artifact-card" data-artifact="' +
+        esc(path) + '">' + buildArtifactShell(path) + '</div></div>';
+      log.appendChild(wrap);
+      window.scrollTo(0, document.body.scrollHeight);
+    }
+  </script>
+</body>
+</html>

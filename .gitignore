@@ -1,0 +1,28 @@
+# --- secrets ---
+host/.env
+
+# --- dependencies / build output ---
+host/node_modules/
+host/logs/
+app/build/
+*.apk
+
+# --- os noise ---
+.DS_Store
+
+# --- runtime workspace (user content, not source) ---
+workspace/
+workspace/.inbox/
+workspace/.artifacts/
+# Agent command queue, chat transcripts and agent ids — runtime state.
+workspace/.canvas/
+workspace/**/.venv/
+workspace/**/__pycache__/
+workspace/**/data/
+workspace/**/*.npz
+workspace/**/*.pdf
+
+# --- android third-party libraries (fetched by build.sh via tools/mlkit-deps) ---
+app/libs/
+app/tools/mlkit-deps/.gradle/
+app/tools/mlkit-deps/build/

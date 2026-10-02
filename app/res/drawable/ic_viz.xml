@@ -1,0 +1,11 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="960"
+    android:viewportHeight="960"
+    android:tint="#FFFFFFFF">
+  <!-- Chart-style mark for Inkside .viz files -->
+  <path
+      android:fillColor="#FFFFFFFF"
+      android:pathData="M160,800L160,160L240,160L240,720L800,720L800,800L160,800ZM320,640L320,400L400,400L400,640L320,640ZM480,640L480,240L560,240L560,640L480,640ZM640,640L640,480L720,480L720,640L640,640Z"/>
+</vector>

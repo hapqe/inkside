@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <!-- Marks a placed element's WebView as loaded, so sizing passes do not reload it. -->
+  <item name="art_loaded" type="id" />
+  <!-- Motion: the running expand/collapse animator on a view. -->
+  <item name="motion_anim" type="id" />
+  <!-- Motion: the running fade-in of a card that is popping in. -->
+  <item name="motion_fade" type="id" />
+  <!-- Motion: set on a view whose press scale is managed elsewhere (opt out of the sweep). -->
+  <item name="motion_no_press" type="id" />
+    <item name="history_fade_target" type="id" />
+</resources>

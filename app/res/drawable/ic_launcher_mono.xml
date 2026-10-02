@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A handwritten i: a lead-in flick, the stem, a small exit hook; the dot sits a little right of the stem. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:strokeColor="#FFFFFF" android:strokeWidth="6.4"
+        android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M44.5,52.5C47.5,49.5 51,46 53.8,44.6C55,48.5 54.2,58 53.2,65.5C52.6,70.8 53.6,75 57.2,74.6C60.2,74.2 63,71.8 65.2,69" />
+    <group android:rotation="-18" android:pivotX="55" android:pivotY="33.6">
+        <path android:fillColor="#FFFFFF"
+            android:pathData="M50.6,33.6a4.4,4 0 1,0 8.8,0a4.4,4 0 1,0 -8.8,0z" />
+    </group>
+</vector>

@@ -1,0 +1,26 @@
+// Downloads the app's third-party libraries and everything they depend on, so the
+// Gradle-free build.sh can dex and package them. Run: gradle -q copyDeps
+//   - ML Kit Digital Ink Recognition: handwriting search
+//   - PdfBox-Android: exporting, rearranging and searching PDFs on the tablet
+repositories {
+    google()
+    mavenCentral()
+}
+
+configurations {
+    ink {
+        transitive = true
+        // PdfBox only needs BouncyCastle for encrypted PDFs; it is 11 MB.
+        exclude group: 'org.bouncycastle'
+    }
+}
+
+dependencies {
+    ink 'com.google.mlkit:digital-ink-recognition:19.0.0'
+    ink 'com.tom-roush:pdfbox-android:2.0.27.0'
+}
+
+tasks.register('copyDeps', Copy) {
+    from configurations.ink
+    into "${projectDir}/../../libs"
+}
