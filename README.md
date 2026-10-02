@@ -60,14 +60,15 @@ at a time; **Settings → Remote** connects and disconnects. Without a computer 
 dictation are unavailable and everything else works the same. Ink and chats sync with the documents;
 undo history stays on each device.
 
-Connect a computer by typing its address (same network, or the same Tailscale tailnet).
+Connect a computer by typing its address (same network, or the same Tailscale tailnet), or, for a
+computer shared over the internet with an access token, its web address (e.g. `inkside.example.com`).
 
 ### Want to try the agent without setting up a computer?
 
 You can ask for a **test access token**: open an issue on this repository titled
-"Test access request". You'll get an address and an access token for a small test computer
-run for this purpose. Enter both under **⋮ → Connect a computer** (the token goes in the
-second field). Your documents stay on your device; the test computer keeps a synced copy
+"Test access request". You'll get an access token for a small test computer run for this purpose.
+Under **⋮ → Connect a computer**, enter `inkside.hapke.me` as the address and the token in the second
+field; it works from any network, no Tailscale needed. Your documents stay on your device; the test computer keeps a synced copy
 with limited space, a fixed model, and may be reset or removed. Its agent runs in a sandbox that
 sees only that workspace. **Everyone with a test token shares the same workspace**, so other
 testers can see what you sync there, and it passes through that computer and its model provider:

@@ -4173,8 +4173,12 @@ const httpServer = app.listen(PORT, HOST, () => {
     console.warn("INKSIDE_SHARED=0: the token holder gets everything this computer's user has. Only do this if the token is yours alone.");
   }
   if (IMPROVE_ENABLED) console.log("improve: on (INKSIDE_IMPROVE=1) — devices can have an agent change this repository");
-  const addrs = reachableAddresses();
-  console.log(`connect from the tablet: ⋮ → Connect a computer, then enter ${addrs.length ? addrs.join(" or ") : "this computer's IP address"}${PORT === 8787 ? "" : `:${PORT}`}`);
+  if (/^(127\.|localhost$|::1$)/.test(HOST)) {
+    console.log(`listening on this computer only (${HOST}:${PORT}): devices reach it through your proxy's address`);
+  } else {
+    const addrs = reachableAddresses();
+    console.log(`connect from the tablet: ⋮ → Connect a computer, then enter ${addrs.length ? addrs.join(" or ") : "this computer's IP address"}${PORT === 8787 ? "" : `:${PORT}`}`);
+  }
   // Index the PDFs for search once things have settled.
   setTimeout(() => {
     const t0 = Date.now();

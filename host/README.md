@@ -88,6 +88,29 @@ who get the workspace and nothing else on the computer.
   resetting every chat at once, anything about where the host keeps its files, and
   dictation unless `INKSIDE_DICTATION=1` (its audio decoding runs outside the sandbox).
 
+**Over the internet**, put the host behind a TLS reverse proxy on a domain name and let it
+listen only locally (`HOST=127.0.0.1`). Devices then enter the bare name (`inkside.example.com`)
+and the token; the app uses HTTPS for names like that, no tailnet needed. Use a subdomain of
+its own (artifact pages use root paths), and let replies stream. With nginx:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8787;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    proxy_buffering off;            # agent replies and /events stream
+    proxy_request_buffering off;
+    proxy_read_timeout 3h;
+    proxy_send_timeout 3h;
+    client_max_body_size 200m;      # uploads, PDF export
+}
+```
+
+The host may also run on another computer than the proxy, for example one reached through an
+SSH reverse tunnel (`ssh -N -R 127.0.0.1:3460:127.0.0.1:8787 proxy-host`, then `proxy_pass` to
+port 3460). Leave `BRIDGE_TRUST_LOOPBACK` off: through a proxy every request looks local.
+
 On Linux, install `bubblewrap` and `socat` first (`apt install bubblewrap socat`); the host
 warns at startup if they are missing.
 

@@ -101,23 +101,41 @@ final class HostLink {
                     error = "that computer runs an older host — update it first";
                 }
             } catch (Exception e) {
-                error = "no answer from " + url.replace("http://", "")
-                        + " — is the Inkside host running, and is this tablet on the same network?";
+                error = url.startsWith("https://")
+                        ? "no answer from " + url.replace("https://", "")
+                                + " — check the address and this tablet's internet connection"
+                        : "no answer from " + url.replace("http://", "")
+                                + " — is the Inkside host running, and is this tablet on the same network?";
             }
             final String msg = error;
             MAIN.post(() -> cb.onError(msg));
         }, "connect").start();
     }
 
-    /** "192.168.1.20" → "http://192.168.1.20:8787". */
+    /**
+     * "192.168.1.20" → "http://192.168.1.20:8787"; a name on the internet ("inkside.hapke.me")
+     * → "https://inkside.hapke.me", since such a host sits behind a TLS proxy.
+     */
     static String normalize(String address) {
         String a = address == null ? "" : address.trim();
         boolean scheme = a.startsWith("http://") || a.startsWith("https://");
-        if (!scheme) a = "http://" + a;
+        if (!scheme) a = (isInternetName(a) ? "https://" : "http://") + a;
         a = a.replaceAll("/+$", "");
         // https addresses (a proxy in front) use their own port.
         if (Uri.parse(a).getPort() < 0 && !a.startsWith("https://")) a = a + ":8787";
         return a;
+    }
+
+    /**
+     * A bare domain name with no port: not an address, not a name on the local network
+     * (".local", a tailnet's ".ts.net", a single-label machine name).
+     */
+    static boolean isInternetName(String address) {
+        String a = address.toLowerCase(java.util.Locale.ROOT).replaceAll("/.*$", "");
+        if (a.isEmpty() || a.startsWith("[") || a.contains(":") || !a.contains(".")) return false;
+        if (a.matches("[0-9.]+")) return false;
+        return !(a.endsWith(".local") || a.endsWith(".ts.net") || a.endsWith(".lan")
+                || a.endsWith(".home") || a.endsWith(".internal"));
     }
 
     /**
