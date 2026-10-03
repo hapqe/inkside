@@ -45,10 +45,18 @@ is with you on your phone too.
 
 Every feature has its own page, with a video to come: **[all features](docs/features/README.md)**.
 
+## Try it out
+
+| | |
+|---|---|
+| **Download the APK** | Latest build on the [Releases page](../../releases/latest). Open it on your Android device and allow installs from your browser or file manager. |
+| **IzzyOnDroid** | Install and update through an F-Droid client from the IzzyOnDroid repo. *Listing requested, link coming.* |
+
+Needs Android 11 or newer. Start writing right away; the agent is optional (step 3 below).
+
 ## Get started
 
-1. **Install the app.** Download the APK from the [releases](../../releases) and install it on
-   your Android tablet or phone, or [build it yourself](app/README.md).
+1. **Install the app.** See [Try it out](#try-it-out), or [build it yourself](app/README.md).
 2. **Start writing.** Open or import a PDF, or make a blank page. Everything works offline and
    your documents stay on the device.
 3. **Add the agent (optional).** The AI features run through a small program on your own

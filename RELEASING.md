@@ -23,3 +23,17 @@ updated by an APK signed with the same key, so losing it means every user has to
 
 Development builds (`bash app/build.sh`, no `RELEASE=1`) use the debug key, so a release build
 cannot be installed over a development one (or the other way round) without uninstalling first.
+
+## IzzyOnDroid
+
+Inkside is offered through the [IzzyOnDroid](https://apt.izzysoft.de/fdroid/) repo, which serves the
+signed APK from GitHub Releases.
+
+- Each release must attach a signed APK (`Inkside-X.Y.Z.apk`) with a higher `versionCode`.
+  Publish it as a normal (not pre-release) release if the repo ignores pre-releases.
+- Listing text and screenshots come from `fastlane/metadata/android/en-US/`. Add
+  `changelogs/<versionCode>.txt` for each release.
+- First listing: open an issue at <https://gitlab.com/IzzyOnDroid/repo/-/issues> ("New app")
+  with the GitHub URL, the license (Apache-2.0), and a note that handwriting search uses ML Kit
+  (proprietary, flagged by the repo as a non-free dependency).
+- Once it is listed, replace "Listing requested" in the README with the repo link.

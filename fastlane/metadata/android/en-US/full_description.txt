@@ -1,0 +1,21 @@
+Inkside is a notebook for studying and coding. Write on your PDFs with a stylus, circle the part you don't understand, and ask. The AI agent sees your marks.
+
+<b>Write on anything</b>
+• Mark up lecture slides, textbooks and papers with pen, highlighter and typed text
+• Palm rejection, pen buttons, snap-to-shape and effect brushes
+• Typeset maths with LaTeX next to your handwriting
+• Reorder pages, search your PDFs and handwriting, export a normal PDF
+
+<b>Ask the AI about the page</b>
+• Circle or box something, then ask in the chat
+• A tutor that asks before it tells
+• Interactive visualizations, dictation and a code editor with run
+
+<b>Everything in sync</b>
+• Documents live on your device and work fully offline
+• Connect a computer once and your tablet and phone share the same documents, ink and chats
+• No Inkside account and no cloud service
+
+The agent features are optional. They run through the Inkside host, a small program on your own computer (see the project page), using your own Claude subscription or API key. Without it, the notebook still works fully.
+
+Handwriting search uses Google ML Kit digital ink (on-device, proprietary).

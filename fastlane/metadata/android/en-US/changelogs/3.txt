@@ -1,0 +1,1 @@
+Shared computers over the internet with an access token; the host works under a proxy path.
