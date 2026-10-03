@@ -132,7 +132,6 @@ public class CodeCanvasView extends View {
     private final float[] matrixValues = new float[9];
     private final RectF tmpRect = new RectF();
     private final RectF visibleWorld = new RectF();
-    private DashPathEffect lassoDash;
     private DashPathEffect selectionDash;
     private float cachedDashScale = -1f;
     private boolean inverseDirty = true;
@@ -158,7 +157,16 @@ public class CodeCanvasView extends View {
     private final Paint imagePaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     /** The reserved slot an artifact's live overlay sits in. */
     private final Paint webSlotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    /** Lasso preview, in screen pixels so it reads the same at every zoom. */
     private final Path lassoPath = new Path();
+    private float[] lassoScreenPts = new float[64];
+    /** The area the lasso will close around. */
+    private final Paint lassoFillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    /** Under the dashes, so they stay visible on ink and on any paper. */
+    private final Paint lassoHaloPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    /** The chord from the pen back to the start: where the lasso will close. */
+    private final Paint lassoClosePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint lassoDotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path strokeDrawPath = new Path();
     /** Smoothed brush width for the in-progress stroke (EMA). */
     private float inkSmoothedWidth = -1f;
@@ -862,6 +870,9 @@ public class CodeCanvasView extends View {
 
     private final List<float[]> lassoPoints = new ArrayList<>();
     private boolean drawingLasso;
+    /** Where the pen is now; the preview runs to it even between stored points. */
+    private float lassoTipX = Float.NaN;
+    private float lassoTipY = Float.NaN;
     private final RectF lassoRegionBounds = new RectF();
     private boolean hasLassoRegion;
 
@@ -1262,9 +1273,22 @@ public class CodeCanvasView extends View {
         erasePreviewPaint.setStyle(Paint.Style.STROKE);
         eraseHaloPaint.setStyle(Paint.Style.STROKE);
 
+        float dp = getResources().getDisplayMetrics().density;
         lassoPaint.setStyle(Paint.Style.STROKE);
-        lassoPaint.setStrokeWidth(2f);
-        lassoPaint.setPathEffect(new DashPathEffect(new float[]{14f, 10f}, 0f));
+        lassoPaint.setStrokeWidth(1.75f * dp);
+        lassoPaint.setStrokeCap(Paint.Cap.ROUND);
+        lassoPaint.setStrokeJoin(Paint.Join.ROUND);
+        lassoPaint.setPathEffect(new DashPathEffect(new float[]{7f * dp, 5f * dp}, 0f));
+        lassoHaloPaint.setStyle(Paint.Style.STROKE);
+        lassoHaloPaint.setStrokeWidth(4.5f * dp);
+        lassoHaloPaint.setStrokeCap(Paint.Cap.ROUND);
+        lassoHaloPaint.setStrokeJoin(Paint.Join.ROUND);
+        lassoHaloPaint.setColor(0xCCFFFFFF);
+        lassoFillPaint.setStyle(Paint.Style.FILL);
+        lassoClosePaint.setStyle(Paint.Style.STROKE);
+        lassoClosePaint.setStrokeWidth(1.25f * dp);
+        lassoClosePaint.setStrokeCap(Paint.Cap.ROUND);
+        lassoClosePaint.setPathEffect(new DashPathEffect(new float[]{3f * dp, 4f * dp}, 0f));
 
         selectionPaint.setStyle(Paint.Style.STROKE);
         selectionPaint.setStrokeWidth(2f);
@@ -1542,6 +1566,8 @@ public class CodeCanvasView extends View {
     private final List<Stroke> deselectedStrokes = new ArrayList<>();
     private final List<CanvasImage> deselectedImages = new ArrayList<>();
     private final List<CanvasTextField> deselectedTextFields = new ArrayList<>();
+    /** Strokes finished after the background redraw in flight took its snapshot. */
+    private final List<Stroke> strokesAfterRebuild = new ArrayList<>();
 
     private boolean hasDeselectedPending() {
         return !deselectedStrokes.isEmpty() || !deselectedImages.isEmpty()
@@ -3668,6 +3694,8 @@ public class CodeCanvasView extends View {
         chromeAccent = theme.primary;
         chromeLight = theme.light;
         lassoPaint.setColor(theme.primary);
+        lassoFillPaint.setColor((theme.primary & 0x00FFFFFF) | 0x1F000000);
+        lassoClosePaint.setColor((theme.primary & 0x00FFFFFF) | 0xB3000000);
         selectionPaint.setColor(theme.primary);
         selectionFillPaint.setColor((theme.primary & 0x00FFFFFF) | 0x55000000);
         gimbalFillPaint.setColor(theme.primary);
@@ -3682,6 +3710,7 @@ public class CodeCanvasView extends View {
         // (the old cream fallback left every dark theme looking like dawn paper).
         pagePaperColor = theme.code != null ? theme.code.paper
                 : (theme.light ? 0xFFFAFAFA : 0xFF1A1A1E);
+        lassoHaloPaint.setColor((pagePaperColor & 0x00FFFFFF) | 0xCC000000);
         document.applyTheme(theme.light);
         emptyHintPaint.setColor(theme.onSurfaceVariant);
         emptyHintPaint.setTextAlign(Paint.Align.CENTER);
@@ -4267,6 +4296,8 @@ public class CodeCanvasView extends View {
         if (w <= 0 || h <= 0 || sceneBackdrop == null || sceneBackdrop.isRecycled()) return;
 
         navRebuildInFlight = true;
+        // Everything finished so far is in this snapshot.
+        strokesAfterRebuild.clear();
         final int gen = ++navRebuildGen;
         final Matrix freezeMatrix = new Matrix(viewMatrix);
         if (navSnapshotActive && !pinchScaling) {
@@ -4584,6 +4615,14 @@ public class CodeCanvasView extends View {
         sceneBackdropOmitsSelection = navRebuildSkipSelected;
         // Requested after the deselect (it bumps the generation), so it has them.
         clearDeselectedPending();
+        if (!strokesAfterRebuild.isEmpty()) {
+            // Finished after this redraw started: still drawn live, and redrawn next.
+            deselectedStrokes.addAll(strokesAfterRebuild);
+            strokesAfterRebuild.clear();
+            sceneBackdropDirty = true;
+            navFreezeFullDirty = true;
+            post(warmBackdropRunnable);
+        }
         releaseBackdropHw();
         if (hw != null) {
             sceneBackdropHw = hw;
@@ -5799,14 +5838,122 @@ public class CodeCanvasView extends View {
     private void drawActiveStroke(Canvas canvas) {
         if (activeStroke == null) return;
         if (drawShapeMorph(canvas, activeStroke)) return;
+        int from = activeStroke.brush == BRUSH_INK ? extendLiveGeom(activeStroke) : 0;
         if (inkHasTip) activeStroke.samples.add(new Sample(inkTipX, inkTipY, inkTipW));
         if (activeStroke.brush != BRUSH_INK) {
             // Its samples still change: build the effect fresh, never cache it.
             drawEffectStroke(canvas, activeStroke, strokePaint, true);
         } else {
-            drawStrokeSegments(canvas, activeStroke, strokePaint, strokeDrawPath);
+            Paint ink = strokePaint;
+            if (needsPenOutline(activeStroke)) {
+                drawLiveGeom(canvas, ink, PenOutline.color(), true);
+                drawStrokeSegmentsPass(canvas, activeStroke, ink, strokeDrawPath,
+                        PenOutline.color(), true, from);
+            }
+            drawLiveGeom(canvas, ink, activeStroke.color, false);
+            drawStrokeSegmentsPass(canvas, activeStroke, ink, strokeDrawPath,
+                    activeStroke.color, false, from);
         }
         if (inkHasTip) activeStroke.samples.remove(activeStroke.samples.size() - 1);
+    }
+
+    // The settled part of the stroke under the pen, batched into a few paths the way a
+    // finished stroke is. Drawing every segment as its own path each frame made a long
+    // stroke slower with every sample — the writing lagged further behind the pen the
+    // longer the line got.
+    private Stroke liveGeomStroke;
+    private int liveGeomVersion;
+    /** Pieces [0, liveGeomPieces) are in {@link #liveGeomPaths}. */
+    private int liveGeomPieces;
+    /** The sample the last cached piece ends on — a different object means a new curve. */
+    private Sample liveGeomAnchor;
+    private final ArrayList<Path> liveGeomPaths = new ArrayList<>();
+    private float[] liveGeomWidths = new float[16];
+    private int liveGeomRun;
+    /** Pieces left live behind the pen: their samples (and widths) may still change. */
+    private static final int LIVE_GEOM_TAIL = 4;
+    /** Pieces per cached path, so appending never re-tessellates one huge path. */
+    private static final int LIVE_GEOM_RUN = 48;
+
+    /**
+     * Brings the cached pieces of {@code s} up to just behind the pen and returns the
+     * first piece still to be drawn per segment.
+     */
+    private int extendLiveGeom(Stroke s) {
+        List<Sample> pts = s.samples;
+        int n = pts.size();
+        boolean valid = liveGeomStroke == s
+                && liveGeomVersion == strokeGeomVersion
+                && liveGeomPieces < n
+                && pts.get(liveGeomPieces) == liveGeomAnchor;
+        if (!valid) {
+            liveGeomStroke = s;
+            liveGeomVersion = strokeGeomVersion;
+            liveGeomPieces = 0;
+            liveGeomAnchor = null;
+            liveGeomPaths.clear();
+            liveGeomRun = 0;
+        }
+        if (n <= START_SETTLE_SAMPLES + LIVE_GEOM_TAIL) return liveGeomPieces;
+        int target = n - LIVE_GEOM_TAIL;
+        float follow = strokeFollow;
+        for (int i = liveGeomPieces; i < target; i++) {
+            Path cur = liveGeomPaths.isEmpty() ? null : liveGeomPaths.get(liveGeomPaths.size() - 1);
+            float curW = cur == null ? -1f : liveGeomWidths[liveGeomPaths.size() - 1];
+            if (i == 0) {
+                Sample p0 = pts.get(0);
+                Sample p1 = pts.get(1);
+                cur = startLiveGeomPath(p0.x, p0.y, (p0.width + p1.width) * 0.5f);
+                cur.lineTo((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f);
+                liveGeomRun = 1;
+                continue;
+            }
+            Sample a = pts.get(i);
+            Sample b = pts.get(i + 1);
+            Sample prev = pts.get(i - 1);
+            float x0 = (prev.x + a.x) * 0.5f;
+            float y0 = (prev.y + a.y) * 0.5f;
+            float x1 = (a.x + b.x) * 0.5f;
+            float y1 = (a.y + b.y) * 0.5f;
+            float ctrlX = a.x + ((2f * a.x - (x0 + x1) * 0.5f) - a.x) * follow;
+            float ctrlY = a.y + ((2f * a.y - (y0 + y1) * 0.5f) - a.y) * follow;
+            if (cur == null || liveGeomRun >= LIVE_GEOM_RUN
+                    || Math.abs(a.width - curW) > curW * GEOM_WIDTH_TOLERANCE) {
+                cur = startLiveGeomPath(x0, y0, a.width);
+                liveGeomRun = 0;
+            }
+            cur.quadTo(ctrlX, ctrlY, x1, y1);
+            liveGeomRun++;
+        }
+        if (target > liveGeomPieces) {
+            liveGeomPieces = target;
+            liveGeomAnchor = pts.get(target);
+        }
+        return liveGeomPieces;
+    }
+
+    private Path startLiveGeomPath(float x, float y, float width) {
+        int k = liveGeomPaths.size();
+        if (k == liveGeomWidths.length) {
+            liveGeomWidths = java.util.Arrays.copyOf(liveGeomWidths, k * 2);
+        }
+        Path p = new Path();
+        p.moveTo(x, y);
+        liveGeomPaths.add(p);
+        liveGeomWidths[k] = width;
+        return p;
+    }
+
+    private void drawLiveGeom(Canvas canvas, Paint ink, int color, boolean outline) {
+        if (liveGeomPieces == 0 || liveGeomStroke != activeStroke) return;
+        ink.setColor(color);
+        ink.setStyle(Paint.Style.STROKE);
+        ink.setStrokeCap(Paint.Cap.ROUND);
+        ink.setStrokeJoin(Paint.Join.ROUND);
+        for (int i = 0; i < liveGeomPaths.size(); i++) {
+            ink.setStrokeWidth(wide(liveGeomWidths[i], outline));
+            canvas.drawPath(liveGeomPaths.get(i), ink);
+        }
     }
 
     // ---- Effect brushes ---------------------------------------------------------------
@@ -7079,7 +7226,18 @@ public class CodeCanvasView extends View {
             // Not in the backdrop until its redraw lands; draw it live till then so
             // the finished stroke does not blink out after the pen lifts.
             deselectedStrokes.add(s);
-            markSceneDirty();
+            if (navRebuildInFlight && sceneBackdropReady) {
+                // The redraw under way only lacks this stroke: let it land and redraw
+                // once more after. Discarding it (as markSceneDirty does) meant steady
+                // writing threw away every redraw, and the strokes drawn live piled up
+                // until each frame redrew a page of handwriting under the pen.
+                strokesAfterRebuild.add(s);
+                sceneBackdropDirty = true;
+                navFreezeFullDirty = true;
+                resetBands();
+            } else {
+                markSceneDirty();
+            }
             return;
         }
         releaseBackdropHw();  // drawn in place — the GPU copy no longer matches
@@ -8392,6 +8550,15 @@ public class CodeCanvasView extends View {
                 lassoPoints.clear();
                 float[] w = screenToWorld(event.getX(index), event.getY(index));
                 lassoPoints.add(new float[]{w[0], w[1]});
+                lassoTipX = w[0];
+                lassoTipY = w[1];
+                if (Build.VERSION.SDK_INT >= 30) {
+                    // Every pen move as it comes, like ink — not batched per frame.
+                    try {
+                        requestUnbufferedDispatch(event);
+                    } catch (Exception ignored) {
+                    }
+                }
                 invalidate();
                 break;
             }
@@ -8405,7 +8572,7 @@ public class CodeCanvasView extends View {
                 }
                 float[] w = screenToWorld(event.getX(pi), event.getY(pi));
                 appendLassoPoint(w[0], w[1]);
-                invalidate();
+                postInvalidateOnAnimation();
                 break;
             }
             case MotionEvent.ACTION_UP:
@@ -8417,11 +8584,16 @@ public class CodeCanvasView extends View {
     }
 
     private void appendLassoPoint(float x, float y) {
+        lassoTipX = x;
+        lassoTipY = y;
         if (!lassoPoints.isEmpty()) {
             float[] last = lassoPoints.get(lassoPoints.size() - 1);
             float dx = x - last[0];
             float dy = y - last[1];
-            if (dx * dx + dy * dy < 4f) return;
+            // In screen pixels: a fixed world distance meant whole steps between
+            // points when zoomed in.
+            float min = 1.5f / Math.max(0.01f, viewScale());
+            if (dx * dx + dy * dy < min * min) return;
         }
         lassoPoints.add(new float[]{x, y});
     }
@@ -8906,16 +9078,18 @@ public class CodeCanvasView extends View {
     /** Per-segment drawing for the stroke still under the pen (its samples change). */
     private void drawStrokeSegments(Canvas canvas, Stroke s, Paint ink, Path scratch) {
         if (needsPenOutline(s)) {
-            drawStrokeSegmentsPass(canvas, s, ink, scratch, PenOutline.color(), true);
+            drawStrokeSegmentsPass(canvas, s, ink, scratch, PenOutline.color(), true, 0);
         }
-        drawStrokeSegmentsPass(canvas, s, ink, scratch, s.color, false);
+        drawStrokeSegmentsPass(canvas, s, ink, scratch, s.color, false, 0);
     }
 
     private static float wide(float width, boolean outline) {
         return outline ? width + PenOutline.strokeExtra(width) : width;
     }
 
-    private void drawStrokeSegmentsPass(Canvas canvas, Stroke s, Paint ink, Path scratch, int color, boolean outline) {
+    /** Pieces before {@code from} are skipped (already drawn from the live cache). */
+    private void drawStrokeSegmentsPass(Canvas canvas, Stroke s, Paint ink, Path scratch,
+                                        int color, boolean outline, int from) {
         ink.setColor(color);
         ink.setStyle(Paint.Style.STROKE);
         ink.setStrokeCap(Paint.Cap.ROUND);
@@ -8939,14 +9113,16 @@ public class CodeCanvasView extends View {
 
         // Midpoint quadratic segments — sharp polyline corners become smooth curves
         // while still allowing gentle per-segment width from pressure.
-        Sample p0 = pts.get(0);
-        Sample p1 = pts.get(1);
-        float midX = (p0.x + p1.x) * 0.5f;
-        float midY = (p0.y + p1.y) * 0.5f;
-        ink.setStrokeWidth(wide((p0.width + p1.width) * 0.5f, outline));
-        canvas.drawLine(p0.x, p0.y, midX, midY, ink);
+        if (from <= 0) {
+            Sample p0 = pts.get(0);
+            Sample p1 = pts.get(1);
+            float midX = (p0.x + p1.x) * 0.5f;
+            float midY = (p0.y + p1.y) * 0.5f;
+            ink.setStrokeWidth(wide((p0.width + p1.width) * 0.5f, outline));
+            canvas.drawLine(p0.x, p0.y, midX, midY, ink);
+        }
 
-        for (int i = 1; i < n - 1; i++) {
+        for (int i = Math.max(1, from); i < n - 1; i++) {
             Sample a = pts.get(i);
             Sample b = pts.get(i + 1);
             Sample prev = pts.get(i - 1);
@@ -8974,21 +9150,54 @@ public class CodeCanvasView extends View {
         canvas.drawLine(endX, endY, last.x, last.y, ink);
     }
 
-    private void rebuildLassoPath() {
-        lassoPath.reset();
-        if (lassoPoints.isEmpty()) return;
-        float[] first = lassoPoints.get(0);
-        lassoPath.moveTo(first[0], first[1]);
-        for (int i = 1; i < lassoPoints.size(); i++) {
+    /**
+     * The lasso being drawn, on a canvas in view coordinates. Built in screen pixels,
+     * so its dashes and width are the same at every zoom (they used to be scaled
+     * from a dash pattern that was only refreshed on some frames). The area it will
+     * close around is tinted, and a chord runs from the pen back to the start.
+     */
+    private void drawLassoPreview(Canvas canvas) {
+        if (!drawingLasso) return;
+        int stored = lassoPoints.size();
+        if (stored == 0) return;
+        // The live pen position goes on the end, so the line and the chord follow the
+        // pen every frame instead of jumping from stored point to stored point.
+        boolean tip = !Float.isNaN(lassoTipX);
+        int n = stored + (tip ? 1 : 0);
+        if (n < 2) return;
+        if (lassoScreenPts.length < n * 2) lassoScreenPts = new float[n * 4];
+        float[] pts = lassoScreenPts;
+        for (int i = 0; i < stored; i++) {
             float[] p = lassoPoints.get(i);
-            lassoPath.lineTo(p[0], p[1]);
+            pts[i * 2] = p[0];
+            pts[i * 2 + 1] = p[1];
         }
+        if (tip) {
+            pts[stored * 2] = lassoTipX;
+            pts[stored * 2 + 1] = lassoTipY;
+        }
+        viewMatrix.mapPoints(pts, 0, pts, 0, n);
+        lassoPath.reset();
+        lassoPath.moveTo(pts[0], pts[1]);
+        for (int i = 1; i < n; i++) lassoPath.lineTo(pts[i * 2], pts[i * 2 + 1]);
+        float sx = pts[0], sy = pts[1];
+        float ex = pts[n * 2 - 2], ey = pts[n * 2 - 1];
+        // Filling closes the path along the chord — exactly what the selection takes.
+        canvas.drawPath(lassoPath, lassoFillPaint);
+        canvas.drawLine(ex, ey, sx, sy, lassoClosePaint);
+        canvas.drawPath(lassoPath, lassoHaloPaint);
+        canvas.drawPath(lassoPath, lassoPaint);
+        // The start, so it is clear where the loop wants to end.
+        float dp = getResources().getDisplayMetrics().density;
+        lassoDotPaint.setColor(lassoHaloPaint.getColor() | 0xFF000000);
+        canvas.drawCircle(sx, sy, 4.5f * dp, lassoDotPaint);
+        lassoDotPaint.setColor(lassoPaint.getColor());
+        canvas.drawCircle(sx, sy, 3f * dp, lassoDotPaint);
     }
 
     private void updateDashEffects(float scale) {
-        if (Math.abs(scale - cachedDashScale) < 0.05f && lassoDash != null) return;
+        if (Math.abs(scale - cachedDashScale) < 0.05f && selectionDash != null) return;
         cachedDashScale = scale;
-        lassoDash = new DashPathEffect(new float[]{14f / scale, 10f / scale}, 0f);
         selectionDash = new DashPathEffect(new float[]{12f / scale, 8f / scale}, 0f);
     }
 
@@ -9114,6 +9323,7 @@ public class CodeCanvasView extends View {
         if (document.isOpen() && (navigating || panFlinging || pinchScaling || overscrollSnapping)) {
             canvas.drawColor(sceneBgColor);
             drawSceneWorld(canvas, /*includeOverlays*/ true, /*skipSelected*/ false);
+            drawLassoPreview(canvas);
             drawOverscrollCharge(canvas, w, h);
             drawFavoritesRadialOverlay(canvas);
             return;
@@ -9164,14 +9374,9 @@ public class CodeCanvasView extends View {
         canvas.save();
         canvas.concat(viewMatrix);
         float scale = viewScale();
+        updateDashEffects(scale);
         drawSearchHits(canvas, scale);
         if (activeStroke != null) drawActiveStroke(canvas);
-        if (drawingLasso && lassoPoints.size() >= 2) {
-            rebuildLassoPath();
-            lassoPaint.setStrokeWidth(2f / scale);
-            lassoPaint.setPathEffect(lassoDash);
-            canvas.drawPath(lassoPath, lassoPaint);
-        }
         if (drawingTextRect) {
             selectionPaint.setStyle(Paint.Style.STROKE);
             selectionPaint.setStrokeWidth(2f / scale);
@@ -9195,6 +9400,7 @@ public class CodeCanvasView extends View {
             canvas.drawCircle(eraseX, eraseY, r, erasePreviewPaint);
         }
         canvas.restore();
+        drawLassoPreview(canvas);
         drawOverscrollCharge(canvas, w, h);
         drawFavoritesRadialOverlay(canvas);
     }
@@ -9998,12 +10204,6 @@ public class CodeCanvasView extends View {
 
         if (includeOverlays) {
             if (activeStroke != null) drawActiveStroke(canvas);
-            if (drawingLasso && lassoPoints.size() >= 2) {
-                rebuildLassoPath();
-                lassoPaint.setStrokeWidth(2f / scale);
-                lassoPaint.setPathEffect(lassoDash);
-                canvas.drawPath(lassoPath, lassoPaint);
-            }
             if (drawingTextRect) {
                 selectionPaint.setStyle(Paint.Style.STROKE);
                 selectionPaint.setStrokeWidth(2f / scale);
