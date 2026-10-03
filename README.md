@@ -2,86 +2,64 @@
 
 # Inkside
 
-A tablet notebook for learning and coding: page-based PDF documents, stylus ink and an
-AI agent that can see what you circled.
+**A tablet notebook where the AI can see what you circled.**
 
-Inkside has two parts:
-
-| Part | Runs on | What it does |
-|------|---------|--------------|
-| [`app/`](app/README.md) | the Android tablet | Documents, PDFs, ink, text, study cards, search, export — everything, on its own. |
-| [`host/`](host/README.md) | your computer (macOS, Linux, Windows) | Optional. Adds the agent chat, running scripts, voice dictation and a workspace on the computer, using the AI subscription or API key you already have there. |
-
-**The app works without the host.** Install it and start writing: documents live on the
-tablet. When you want the agent, run the host on a computer on the same network and type
-its address into the app — no accounts, codes or config files.
-
-```
- Tablet (app)                          Computer (host)
- ┌─────────────────────┐ enter its IP  ┌──────────────────────────────┐
- │ This tablet's       │ ────────────▶ │ Inkside host (Node)            │
- │ workspace (offline) │  same network │  ├ agent: Claude Code login  │
- │                     │ ◀──────────── │  │   or API key              │
- │ Computer workspace  │      HTTP     │  ├ scripts, voice, search    │
- └─────────────────────┘               │  └ ~/Inkside (the workspace)   │
-                                       └──────────────────────────────┘
-```
-
-## Quick start
-
-**Tablet:** install the APK (build it with [app/README.md](app/README.md); releases will carry it).
-It starts with a *Notes* project in the tablet's own workspace.
-
-**Computer (optional):**
-
-```bash
-cd host
-npm install
-npm start          # prints the address to enter in the app
-```
-
-Then in the app: **⋮ → Connect a computer → My own computer**, and type the address it printed
-(e.g. `192.168.1.20`). The tablet must be on the same network as the computer. The host keeps
-its documents in `~/Inkside`. Details, running it as a background service and every
-setting: [host/README.md](host/README.md).
-
-## Screenshots
+Write on your PDFs with a stylus, circle the part you don't understand, and ask. Inkside is
+for studying and coding on an Android tablet: lecture slides, textbooks, papers and your own
+notes in one place, with an AI tutor beside the page.
 
 [![A lecture PDF with handwriting](docs/screenshots/02-document-dark.png)](docs/gallery.md)
 
-More in the [gallery](docs/gallery.md).
+<sub>More in the [gallery](docs/gallery.md).</sub>
 
-## Workspaces
+## What you can do
 
-Documents are **always stored on the tablet**. A connected computer keeps a **copy** of the
-workspace (so the agent and scripts can work on the same files); the app syncs the two in
-the background (live: within seconds; or switch **Live sync** off and tap **Sync now**). One computer
-at a time; **Settings → Remote** connects and disconnects. Without a computer the agent, scripts and
-dictation are unavailable and everything else works the same. Ink and chats sync with the documents;
-undo history stays on each device.
+**Write on anything**
+- Mark up PDFs with pen, highlighter and typed text, page by page.
+- Handwriting that feels right: palm rejection, pen buttons, snap-to-shape, effect brushes
+  (rainbow, glow, sparkle, calligraphy, spray).
+- Typeset maths with LaTeX next to your handwriting.
+- Reorder, duplicate and add pages; export everything back to a normal PDF.
+- Search the text of your PDFs, and your own handwriting.
 
-Connect a computer by typing its address (same network, or the same Tailscale tailnet), or, for a
-computer shared over the internet with an access token, its web address (e.g. `inkside.example.com`).
+**Ask the AI about what's on the page**
+- Circle, underline or box something, then ask. The agent sees your marks, so "explain the
+  blue box" or "replace the loop in the green box with a map" just works.
+- A tutor that asks before it tells, with answers in LaTeX next to your document.
+- Interactive visualizations the agent builds for you, saved with the project.
+- Dictate instead of typing.
 
-### Want to try the agent without setting up a computer?
+**Code on the same tablet**
+- A code editor with highlighting, find and replace, and run (with a connected computer).
+- Let the agent edit your files and run scripts, with the result shown next to your notes.
 
-You can ask for a **test access token**: open an issue on this repository titled
-"Test access request". You'll get an access token for a small test computer run for this purpose.
-Under **⋮ → Connect a computer**, enter `inkside.hapke.me` as the address and the token in the second
-field; it works from any network, no Tailscale needed. Your documents stay on your device; the test computer keeps a synced copy
-with limited space, a fixed model, and may be reset or removed. Its agent runs in a sandbox that
-sees only that workspace. **Everyone with a test token shares the same workspace**, so other
-testers can see what you sync there, and it passes through that computer and its model provider:
-don't put anything private on it.
+**Keep track of your study**
+- A timer that feeds a weekly study view: when you studied, coloured by project.
+- Projects, favourites and 40+ colour themes, light and dark.
 
-How the two talk: [docs/protocol.md](docs/protocol.md).
+## Get started
 
-## Security
+1. **Install the app.** Download the APK from the [releases](../../releases) and install it on
+   your Android tablet, or [build it yourself](app/README.md).
+2. **Start writing.** Open or import a PDF, or make a blank page. Everything works offline and
+   your documents stay on the tablet.
+3. **Add the agent (optional).** The AI features run through a small program on your own
+   computer, using the Claude subscription or API key you already have. Start it, type its
+   address into the app, done. Step by step in [Connecting a computer](docs/connecting.md).
 
-Without an access token the host trusts its network: anyone who can reach it can do what your
-user account can. With one it becomes a shared host whose agent and scripts are sandboxed to the
-workspace — see [Sharing a computer](host/README.md#sharing-a-computer). To report a
-vulnerability, see [SECURITY.md](SECURITY.md).
+## Good to know
+
+- **Private by design:** your documents live on your tablet, and your AI credentials stay on
+  your computer. There are no Inkside accounts.
+- **Bring your own AI:** the agent needs a Claude subscription or API key. Without one, the
+  notebook still works fully.
+- **Early software:** it is built and used by one person, so expect rough edges. Bug reports
+  and ideas are welcome as [issues](../../issues).
+
+## For developers
+
+[App](app/README.md) · [Host](host/README.md) · [Protocol](docs/protocol.md) ·
+[Security](SECURITY.md) · [Releasing](RELEASING.md)
 
 ## License
 
