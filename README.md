@@ -2,11 +2,12 @@
 
 # Inkside
 
-**A tablet notebook where the AI can see what you circled.**
+**A notebook where the AI can see what you circled.**
 
 Write on your PDFs with a stylus, circle the part you don't understand, and ask. Inkside is
-for studying and coding on an Android tablet: lecture slides, textbooks, papers and your own
-notes in one place, with an AI tutor beside the page.
+for studying and coding on Android: lecture slides, textbooks, papers and your own notes in one
+place, with an AI tutor beside the page. It is made for a tablet and stylus, and your notebook
+is with you on your phone too.
 
 [![A lecture PDF with handwriting](docs/screenshots/02-document-dark.png)](docs/gallery.md)
 
@@ -29,27 +30,34 @@ notes in one place, with an AI tutor beside the page.
 - Interactive visualizations the agent builds for you, saved with the project.
 - Dictate instead of typing.
 
-**Code on the same tablet**
+**Code on the same device**
 - A code editor with highlighting, find and replace, and run (with a connected computer).
 - Let the agent edit your files and run scripts, with the result shown next to your notes.
+
+**Use it on all your devices**
+- Do most of your work on the tablet and still have everything on your phone. Connect a
+  computer once and your documents, ink and chats sync in the background; connect your phone
+  (or another tablet) to the same computer and it has everything too. No accounts, no cloud service.
 
 **Keep track of your study**
 - A timer that feeds a weekly study view: when you studied, coloured by project.
 - Projects, favourites and 40+ colour themes, light and dark.
 
+Every feature has its own page, with a video to come: **[all features](docs/features/README.md)**.
+
 ## Get started
 
 1. **Install the app.** Download the APK from the [releases](../../releases) and install it on
-   your Android tablet, or [build it yourself](app/README.md).
+   your Android tablet or phone, or [build it yourself](app/README.md).
 2. **Start writing.** Open or import a PDF, or make a blank page. Everything works offline and
-   your documents stay on the tablet.
+   your documents stay on the device.
 3. **Add the agent (optional).** The AI features run through a small program on your own
    computer, using the Claude subscription or API key you already have. Start it, type its
    address into the app, done. Step by step in [Connecting a computer](docs/connecting.md).
 
 ## Good to know
 
-- **Private by design:** your documents live on your tablet, and your AI credentials stay on
+- **Private by design:** your documents live on your device, and your AI credentials stay on
   your computer. There are no Inkside accounts.
 - **Bring your own AI:** the agent needs a Claude subscription or API key. Without one, the
   notebook still works fully.

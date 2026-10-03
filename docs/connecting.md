@@ -4,9 +4,9 @@ The Inkside app works on its own. A computer running the [Inkside host](../host/
 agent chat, running scripts, voice dictation and a workspace on the computer.
 
 ```
- Tablet (app)                          Computer (host)
+ Device (app)                          Computer (host)
  ┌─────────────────────┐ enter its IP  ┌──────────────────────────────┐
- │ This tablet's       │ ────────────▶ │ Inkside host (Node)          │
+ │ This device's       │ ────────────▶ │ Inkside host (Node)          │
  │ workspace (offline) │  same network │  ├ agent: Claude Code login  │
  │                     │ ◀──────────── │  │   or API key              │
  │ Computer workspace  │      HTTP     │  ├ scripts, voice, search    │
@@ -25,13 +25,13 @@ npm start          # prints the address to enter in the app
 ```
 
 Then in the app: **⋮ → Connect a computer → My own computer**, and type the address it printed
-(e.g. `192.168.1.20`). The tablet must be on the same network as the computer. The host keeps
+(e.g. `192.168.1.20`). Your tablet or phone must be on the same network as the computer. The host keeps
 its documents in `~/Inkside`. Details, running it as a background service and every
 setting: [host/README.md](../host/README.md).
 
 ## Workspaces
 
-Documents are **always stored on the tablet**. A connected computer keeps a **copy** of the
+Documents are **always stored on the device**. A connected computer keeps a **copy** of the
 workspace (so the agent and scripts can work on the same files); the app syncs the two in
 the background (live: within seconds; or switch **Live sync** off and tap **Sync now**). One computer
 at a time; **Settings → Remote** connects and disconnects. Without a computer the agent, scripts and
