@@ -865,6 +865,7 @@ public final class BridgeClient implements Workspace {
                 if (project != null && !project.isEmpty()) body.put("project", project);
                 // Learning Mode is global: every message says whether it is on.
                 body.put("learningMode", learningMode);
+                body.put("allowPageView", allowPageView);
                 streamNdjson("/chat/stream", body, listener);
             } catch (Exception e) {
                 String msg = e.getMessage() != null ? e.getMessage() : String.valueOf(e);
@@ -875,6 +876,12 @@ public final class BridgeClient implements Workspace {
 
     /** Learning Mode (Settings): sent with every chat message. */
     private volatile boolean learningMode;
+    /** Settings → AI: whether the agent may look at the user's pages; sent with every message. */
+    private volatile boolean allowPageView = true;
+
+    public void setAllowPageView(boolean on) {
+        allowPageView = on;
+    }
 
     public void setLearningMode(boolean on) {
         learningMode = on;
@@ -894,11 +901,12 @@ public final class BridgeClient implements Workspace {
         });
     }
 
-    /** Counts per level: {enabled, concepts, counts:{level:n}, goals, …}. */
-    public void learningState(Callback<JSONObject> cb) {
+    /** Counts per level in one project: {enabled, concepts, counts:{level:n}, goals, …}. */
+    public void learningState(String project, Callback<JSONObject> cb) {
         io.execute(() -> {
             try {
-                JSONObject o = getJson("/learning/state");
+                JSONObject o = getJson("/learning/state?project="
+                        + java.net.URLEncoder.encode(project != null ? project : "", "UTF-8"));
                 main.post(() -> cb.onSuccess(o));
             } catch (Exception e) {
                 main.post(() -> cb.onError(e.getMessage()));
@@ -906,10 +914,26 @@ public final class BridgeClient implements Workspace {
         });
     }
 
-    public void resetLearning(Callback<JSONObject> cb) {
+    /** One project's progress, topics and goals, for the Learning view. */
+    public void learningProgress(String project, Callback<JSONObject> cb) {
         io.execute(() -> {
             try {
-                JSONObject o = postJson("/learning/reset", new JSONObject());
+                JSONObject o = getJson("/learning/progress?project="
+                        + java.net.URLEncoder.encode(project != null ? project : "", "UTF-8"));
+                main.post(() -> cb.onSuccess(o));
+            } catch (Exception e) {
+                main.post(() -> cb.onError(e.getMessage()));
+            }
+        });
+    }
+
+    /** Forget what the tutor recorded in one project; the others keep theirs. */
+    public void resetLearning(String project, Callback<JSONObject> cb) {
+        io.execute(() -> {
+            try {
+                JSONObject body = new JSONObject();
+                body.put("project", project != null ? project : "");
+                JSONObject o = postJson("/learning/reset", body);
                 main.post(() -> cb.onSuccess(o));
             } catch (Exception e) {
                 main.post(() -> cb.onError(e.getMessage()));

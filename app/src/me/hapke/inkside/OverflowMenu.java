@@ -129,6 +129,12 @@ final class OverflowMenu {
             dismissOverflowMenu();
             new StudyWeekDialog(act).show();
         }));
+        if (act.aiEnabled && act.computers.hasHost()) {
+            addOverflowRow(menu, overflowItem(R.drawable.ic_bolt, "Learning progress", () -> {
+                dismissOverflowMenu();
+                new LearningDialog(act).show();
+            }));
+        }
         if (act.canvas != null && act.canvas.hasDocument()) {
             addOverflowRow(menu, overflowItem(R.drawable.ic_download, "Export PDF", () -> {
                 dismissOverflowMenu();

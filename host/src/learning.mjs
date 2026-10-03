@@ -4,8 +4,10 @@
  * Two things are kept apart on purpose:
  *
  *   - Conversation context stays per chat (each chat is its own agent session).
- *   - What the student KNOWS is global — one learner model shared by every chat,
- *     stored in workspace/.learning/state.json so the agent can also read it.
+ *   - What the student KNOWS is kept per project — one learner model shared by every
+ *     chat of that project (documents outside any project share the workspace's).
+ *     The agent only ever sees the model of the project the chat runs in; the others
+ *     stay out of its prompt and its tools. Stored in workspace/.learning/state.json.
  *
  * The learner model tracks each concept on a ladder:
  *
@@ -72,34 +74,102 @@ function clip(s, n = 300) {
   return t.length > n ? `${t.slice(0, n - 1)}…` : t;
 }
 
+/** What is learned in one project. */
+function emptyScope() {
+  return { concepts: {}, goals: {}, pendingDocs: [] };
+}
+
 function emptyState() {
-  return { version: 1, enabled: false, concepts: {}, goals: {}, pendingDocs: [] };
+  return { version: 2, enabled: false, projects: {} };
+}
+
+/** Project folder (workspace-relative) → key; "" is the workspace outside any project. */
+export function scopeKey(project) {
+  const p = String(project || "").trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  return p === "." ? "" : p;
 }
 
 export class LearningStore {
-  constructor(workspace) {
+  /**
+   * @param {string} workspace
+   * @param {{ projectOf?: (doc: string) => Promise<string> }} [opts] — the project a
+   *   workspace path belongs to; only used to sort a pre-project (v1) model.
+   */
+  constructor(workspace, { projectOf = async () => "" } = {}) {
     this.realWorkspace = realpathLoose(workspace);
     this.root = path.join(workspace, ".learning");
     this.file = path.join(this.root, "state.json");
+    this.projectOf = projectOf;
     this.state = null;
+    /** A v1 model (one for everything) waiting to be split up by project. */
+    this.legacy = null;
     this.chain = Promise.resolve();
   }
 
   async init() {
     await fsp.mkdir(this.root, { recursive: true });
     await this.load();
+    if (this.legacy) await this.migrateLegacy();
   }
 
   async load() {
     try {
       const o = JSON.parse(await fsp.readFile(this.file, "utf8"));
-      this.state = { ...emptyState(), ...o };
-      this.state.concepts = this.state.concepts || {};
-      this.state.goals = this.state.goals || {};
+      const { concepts, goals, pendingDocs, ...rest } = o || {};
+      this.state = { ...emptyState(), ...rest };
+      this.state.projects = this.state.projects || {};
+      if (!o.projects && (concepts || goals || pendingDocs)) {
+        this.legacy = { concepts: concepts || {}, goals: goals || {}, pendingDocs: pendingDocs || [] };
+      }
     } catch {
       this.state = emptyState();
     }
     return this.state;
+  }
+
+  /**
+   * A v1 model was one for all projects. Goals and pending documents go to the project
+   * their document lives in; a concept goes to every project whose goals name it, and
+   * the rest to the workspace outside projects.
+   */
+  migrateLegacy() {
+    const legacy = this.legacy;
+    this.legacy = null;
+    return this.update(async (s) => {
+      const conceptScopes = new Map();
+      for (const [doc, g] of Object.entries(legacy.goals)) {
+        const key = scopeKey(await this.projectOf(doc).catch(() => ""));
+        this.scope(s, key).goals[doc] = g;
+        for (const it of g?.items || []) {
+          for (const c of it.concepts || []) {
+            const ck = conceptKey(c);
+            if (!conceptScopes.has(ck)) conceptScopes.set(ck, new Set());
+            conceptScopes.get(ck).add(key);
+          }
+        }
+      }
+      for (const doc of legacy.pendingDocs) {
+        const key = scopeKey(await this.projectOf(doc).catch(() => ""));
+        this.scope(s, key).pendingDocs.push(doc);
+      }
+      for (const [ck, c] of Object.entries(legacy.concepts)) {
+        for (const key of conceptScopes.get(ck) || [""]) {
+          this.scope(s, key).concepts[ck] = JSON.parse(JSON.stringify(c));
+        }
+      }
+      s.version = 2;
+      return true;
+    });
+  }
+
+  /** The model of one project, created on first use. */
+  scope(s, project) {
+    const key = scopeKey(project);
+    const sc = (s.projects[key] = s.projects[key] || emptyScope());
+    sc.concepts = sc.concepts || {};
+    sc.goals = sc.goals || {};
+    sc.pendingDocs = sc.pendingDocs || [];
+    return sc;
   }
 
   /** Serialised read-modify-write; the file is replaced atomically. */
@@ -117,7 +187,16 @@ export class LearningStore {
     return p;
   }
 
-  async snapshot() {
+  /** One project's model ({ enabled, concepts, goals, pendingDocs }) — never another's. */
+  async snapshot(project = "") {
+    await this.chain;
+    if (!this.state) await this.load();
+    const sc = this.state.projects[scopeKey(project)] || emptyScope();
+    return JSON.parse(JSON.stringify({ enabled: !!this.state.enabled, project: scopeKey(project), ...sc }));
+  }
+
+  /** Everything, every project — for export, not for the agent. */
+  async snapshotAll() {
     await this.chain;
     if (!this.state) await this.load();
     return JSON.parse(JSON.stringify(this.state));
@@ -134,10 +213,10 @@ export class LearningStore {
     });
   }
 
-  reset() {
+  /** Forget one project's model; the other projects keep theirs. */
+  reset(project = "") {
     return this.update((s) => {
-      const enabled = s.enabled;
-      Object.assign(s, emptyState(), { enabled });
+      delete s.projects[scopeKey(project)];
       return true;
     });
   }
@@ -150,8 +229,9 @@ export class LearningStore {
    * short summary of what the student said or did. "mastered" requires the concept
    * to be at "transferred" already. Lower levels are allowed (a failed recall).
    */
-  recordEvidence({ concept, level, evidence = "", source = "student", chatId = "", goalId = "" }) {
-    return this.update((s) => {
+  recordEvidence({ project = "", concept, level, evidence = "", source = "student", chatId = "", goalId = "" }) {
+    return this.update((st) => {
+      const s = this.scope(st, project);
       const key = conceptKey(concept);
       if (!key) return { accepted: false, message: "concept is required" };
       if (!LEVELS.includes(level)) {
@@ -222,8 +302,9 @@ export class LearningStore {
    * tasks it names (their hint progress and status stay) and adds the new ones, so
    * goals can be defined in several batches.
    */
-  setGoals({ document, goals }) {
-    return this.update((s) => {
+  setGoals({ project = "", document, goals }) {
+    return this.update((st) => {
+      const s = this.scope(st, project);
       const doc = String(document || "").trim();
       if (!doc) return { accepted: false, message: "document is required" };
       if (!Array.isArray(goals) || !goals.length) {
@@ -282,8 +363,9 @@ export class LearningStore {
    * cannot be skipped without a reason, and between rungs the student must have
    * contributed something (studentContribution) — consuming hints is not learning.
    */
-  hintStep({ document, goalId, level, studentContribution = "", reason = "", chatId = "" }) {
-    return this.update((s) => {
+  hintStep({ project = "", document, goalId, level, studentContribution = "", reason = "", chatId = "" }) {
+    return this.update((st) => {
+      const s = this.scope(st, project);
       const g = s.goals[String(document || "")]?.items?.find((x) => x.id === goalId);
       if (!g) return { accepted: false, message: "unknown goal — call set_goals for this document first" };
       const lvl = Number(level);
@@ -334,8 +416,9 @@ export class LearningStore {
   }
 
   /** A goal was reached — by the student themselves, or with the solution shown. */
-  completeGoal({ document, goalId, by = "student", evidence = "" }) {
-    return this.update((s) => {
+  completeGoal({ project = "", document, goalId, by = "student", evidence = "" }) {
+    return this.update((st) => {
+      const s = this.scope(st, project);
       const g = s.goals[String(document || "")]?.items?.find((x) => x.id === goalId);
       if (!g) return { accepted: false, message: "unknown goal" };
       if (by === "student" && !clip(evidence)) {
@@ -350,10 +433,11 @@ export class LearningStore {
   }
 
   /** A PDF arrived (upload or chat attachment): it should get learning goals. */
-  notePendingDocument(doc) {
+  notePendingDocument(doc, project = "") {
     const d = String(doc || "").trim();
     if (!d || !/\.pdf$/i.test(d)) return Promise.resolve(false);
-    return this.update((s) => {
+    return this.update((st) => {
+      const s = this.scope(st, project);
       s.pendingDocs = (s.pendingDocs || []).filter((x) => x !== d);
       if (!s.goals[d]) s.pendingDocs.push(d);
       // Only a runaway queue is trimmed; a document waiting for goals is not forgotten.
@@ -362,14 +446,15 @@ export class LearningStore {
     });
   }
 
-  /** Counts per level, for the app's settings line. */
-  async summary() {
-    const s = await this.snapshot();
+  /** Counts per level in one project, for the app's settings line. */
+  async summary(project = "") {
+    const s = await this.snapshot(project);
     const counts = Object.fromEntries(LEVELS.map((l) => [l, 0]));
     for (const c of Object.values(s.concepts)) counts[c.level] = (counts[c.level] || 0) + 1;
     const goals = Object.values(s.goals).reduce((n, d) => n + (d.items?.length || 0), 0);
     return {
       enabled: !!s.enabled,
+      project: s.project,
       concepts: Object.keys(s.concepts).length,
       counts,
       documentsWithGoals: Object.keys(s.goals).length,
@@ -379,9 +464,119 @@ export class LearningStore {
   }
 }
 
+/** How much a goal counts toward course progress. */
+function goalScore(g) {
+  if (g.status === "solved_by_student") return 1;
+  if (g.status === "solution_shown") return 0.5;
+  return g.hintLevel > 0 ? 0.1 : 0;
+}
+
+/**
+ * One project's model as the app's Learning view shows it: course progress, topics on
+ * the ladder (concepts the tutor recorded plus those its goals name), and goals per
+ * document.
+ *
+ * Course progress blends two things: how far each topic is up the ladder (mastered =
+ * 100%, not encountered = 0%) and how many goals are done (solved alone = full,
+ * solution shown = half, started = a little). Topics weigh 60%, goals 40%; with only
+ * one of the two, it alone decides.
+ */
+export function learningProgress(state) {
+  const top = LEVELS.length - 1;
+  const topics = new Map();
+  for (const [key, c] of Object.entries(state.concepts || {})) {
+    const last = (c.evidence || []).filter((e) => e.note).slice(-1)[0];
+    topics.set(key, {
+      name: c.name,
+      level: c.level,
+      updatedAt: c.updatedAt || null,
+      lastEvidence: last ? { note: last.note, source: last.source, at: last.at } : null,
+      evidenceCount: (c.evidence || []).length,
+      inGoals: 0,
+    });
+  }
+  const documents = [];
+  let goalsTotal = 0;
+  let goalSum = 0;
+  const statusCounts = { open: 0, solved_by_student: 0, solution_shown: 0 };
+  for (const [doc, g] of Object.entries(state.goals || {})) {
+    const items = g?.items || [];
+    let docSum = 0;
+    for (const it of items) {
+      for (const name of it.concepts || []) {
+        const key = conceptKey(name);
+        if (!key) continue;
+        if (!topics.has(key)) {
+          topics.set(key, { name, level: "not_encountered", updatedAt: null, lastEvidence: null, evidenceCount: 0, inGoals: 0 });
+        }
+        topics.get(key).inGoals++;
+      }
+      const sc = goalScore(it);
+      docSum += sc;
+      statusCounts[it.status] = (statusCounts[it.status] || 0) + 1;
+    }
+    goalsTotal += items.length;
+    goalSum += docSum;
+    documents.push({
+      document: doc,
+      updatedAt: g?.updatedAt || g?.setAt || null,
+      progress: items.length ? docSum / items.length : 0,
+      done: items.filter((it) => it.status !== "open").length,
+      total: items.length,
+      goals: items.map((it) => ({
+        id: it.id,
+        task: it.task,
+        objective: it.objective || "",
+        policy: it.policy,
+        status: it.status,
+        hintLevel: it.hintLevel || 0,
+        awaitingStudent: !!it.awaitingStudent,
+        concepts: it.concepts || [],
+      })),
+    });
+  }
+  documents.sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+
+  const list = [...topics.values()].sort(
+    (a, b) => levelIndex(b.level) - levelIndex(a.level) || String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""))
+  );
+  const levels = Object.fromEntries(LEVELS.map((l) => [l, 0]));
+  let topicSum = 0;
+  for (const t of list) {
+    levels[t.level] = (levels[t.level] || 0) + 1;
+    topicSum += levelIndex(t.level) / top;
+  }
+  const topicProgress = list.length ? topicSum / list.length : null;
+  const goalProgress = goalsTotal ? goalSum / goalsTotal : null;
+  const overall =
+    topicProgress != null && goalProgress != null
+      ? 0.6 * topicProgress + 0.4 * goalProgress
+      : topicProgress ?? goalProgress ?? 0;
+  return {
+    project: state.project || "",
+    enabled: !!state.enabled,
+    progress: overall,
+    topicProgress,
+    goalProgress,
+    topics: {
+      total: list.length,
+      encountered: list.filter((t) => t.level !== "not_encountered").length,
+      mastered: levels.mastered,
+      levels,
+      items: list,
+    },
+    goals: { total: goalsTotal, ...statusCounts },
+    documents,
+    pendingDocs: (state.pendingDocs || []).filter((d) => !state.goals?.[d]),
+    updatedAt: state.updatedAt || null,
+    levelOrder: LEVELS,
+  };
+}
+
 /**
  * Per-turn prompt block while Learning Mode is on: the tutor policy plus a compact
- * view of the global learner model and the open document's goals. Per turn (not in
+ * view of the chat's project's learner model (`state` is one project's snapshot)
+ * and the open document's goals. Per turn (not in
  * the session preamble) so switching the mode takes effect in every chat at once.
  */
 export function formatLearningContext(state, { openFile = "" } = {}) {
@@ -415,13 +610,13 @@ export function formatLearningContext(state, { openFile = "" } = {}) {
       .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))
       .slice(0, MAX_CONCEPTS_IN_PROMPT);
     const mastered = concepts.filter((c) => c.level === "mastered").length;
-    lines.push("", `Learner model (global across chats; ${concepts.length} concepts, ${mastered} mastered):`);
+    lines.push("", `Learner model (this project, shared by its chats; ${concepts.length} concepts, ${mastered} mastered):`);
     for (const c of active) lines.push(`- ${c.name}: ${c.level}`);
     if (concepts.length > active.length + mastered) {
       lines.push("- … more in mcp__learning__learner_state");
     }
   } else {
-    lines.push("", "Learner model: nothing recorded yet.");
+    lines.push("", "Learner model: nothing recorded yet in this project.");
   }
 
   const doc = String(openFile || "").split(",")[0].trim();
@@ -454,7 +649,7 @@ export function formatLearningContext(state, { openFile = "" } = {}) {
 }
 
 /** Per-run MCP server exposing the learner model to the agent. */
-export function createLearningMcpServer(store, { chatId = "", openFile = "" } = {}) {
+export function createLearningMcpServer(store, { chatId = "", openFile = "", project = "" } = {}) {
   const docDefault = String(openFile || "").split(",")[0].trim();
   const ok = (o) => ({ content: [{ type: "text", text: JSON.stringify(o, null, 2) }] });
   const fail = (o) => ({ content: [{ type: "text", text: JSON.stringify(o, null, 2) }], isError: true });
@@ -464,14 +659,14 @@ export function createLearningMcpServer(store, { chatId = "", openFile = "" } = 
     tools: [
       tool(
         "learner_state",
-        "The student's global learner model (all chats): concept levels with evidence, and the " +
-          "learning goals of a document. Filter concepts with `query`.",
+        "The student's learner model for this project (shared by its chats): concept levels with " +
+          "evidence, and the learning goals of a document. Filter concepts with `query`.",
         {
           query: z.string().optional().describe("substring to filter concept names"),
           document: z.string().optional().describe("document whose goals to include (default: the open one)"),
         },
         async (args) => {
-          const s = await store.snapshot();
+          const s = await store.snapshot(project);
           const q = conceptKey(args?.query || "");
           const concepts = Object.entries(s.concepts)
             .filter(([k]) => !q || k.includes(q))
@@ -495,7 +690,7 @@ export function createLearningMcpServer(store, { chatId = "", openFile = "" } = 
           goalId: z.string().optional(),
         },
         async (args) => {
-          const r = await store.recordEvidence({ ...args, chatId });
+          const r = await store.recordEvidence({ ...args, project, chatId });
           return r.accepted ? ok(r) : fail(r);
         }
       ),
@@ -520,7 +715,7 @@ export function createLearningMcpServer(store, { chatId = "", openFile = "" } = 
             .min(1),
         },
         async (args) => {
-          const r = await store.setGoals({ document: args?.document || docDefault, goals: args?.goals });
+          const r = await store.setGoals({ project, document: args?.document || docDefault, goals: args?.goals });
           return r.accepted ? ok(r) : fail(r);
         }
       ),
@@ -537,7 +732,7 @@ export function createLearningMcpServer(store, { chatId = "", openFile = "" } = 
           reason: z.string().optional(),
         },
         async (args) => {
-          const r = await store.hintStep({ ...args, document: args?.document || docDefault, chatId });
+          const r = await store.hintStep({ ...args, project, document: args?.document || docDefault, chatId });
           return r.accepted ? ok(r) : fail(r);
         }
       ),
@@ -551,7 +746,7 @@ export function createLearningMcpServer(store, { chatId = "", openFile = "" } = 
           document: z.string().optional(),
         },
         async (args) => {
-          const r = await store.completeGoal({ ...args, document: args?.document || docDefault });
+          const r = await store.completeGoal({ ...args, project, document: args?.document || docDefault });
           return r.accepted ? ok(r) : fail(r);
         }
       ),

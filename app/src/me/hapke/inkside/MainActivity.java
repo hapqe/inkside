@@ -183,6 +183,9 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
     /** Learning Mode (Settings → AI): the tutor adapts instead of handing out solutions. */
     static final String PREF_LEARNING_MODE = "learningMode";
     boolean learningMode = false;
+    /** Settings → AI: whether the chat agent may take screenshots of your pages. */
+    static final String PREF_AGENT_SEES_PAGES = "agentSeesPages";
+    boolean agentSeesPages = true;
     /** On-device handwriting recognition, feeding search. Off until turned on. */
     HandwritingIndex handwriting;
     final android.os.Handler saveHandler = new android.os.Handler(android.os.Looper.getMainLooper());
@@ -473,6 +476,8 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         localWorkspace.seedIfEmpty();
         learningMode = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_LEARNING_MODE, false);
         bridge.setLearningMode(learningMode);
+        agentSeesPages = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AGENT_SEES_PAGES, true);
+        bridge.setAllowPageView(agentSeesPages);
         java.io.File profileDir = Profiles.filesDir(this, profile);
         chatsDir = new java.io.File(profileDir, "chats");
         stateStore = new AppStateStore(profileDir);
@@ -647,6 +652,16 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
             chatInput.setHint(chatIdleHint());
         }
         refreshLearningBadge();
+    }
+
+    /**
+     * Page viewing on/off. Each message tells the host (which then leaves the agent's
+     * page tool out), and the app itself refuses page captures while it is off.
+     */
+    void setAgentSeesPages(boolean on) {
+        agentSeesPages = on;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_AGENT_SEES_PAGES, on).apply();
+        if (bridge != null) bridge.setAllowPageView(on);
     }
 
     /** Placeholder of the message box when nothing is recording or transcribing. */

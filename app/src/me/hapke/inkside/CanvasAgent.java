@@ -99,6 +99,15 @@ final class CanvasAgent {
                 act.bridge.postCaptureResult(reply);
                 return;
             }
+            // Settings → AI: page viewing off means no screenshots, whoever asks.
+            if (!act.agentSeesPages) {
+                JSONObject refused = new JSONObject();
+                refused.put("id", id);
+                refused.put("ok", false);
+                refused.put("error", "The user has turned off page viewing for the agent (Settings → AI).");
+                act.bridge.postCaptureResult(refused);
+                return;
+            }
             JSONObject spec = request.optJSONObject("pages");
             String mode = spec != null ? spec.optString("mode", "current") : "current";
             int max = Math.max(1, request.optInt("maxPages", 20));

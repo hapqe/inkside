@@ -12,7 +12,7 @@ import { query, AbortError, deleteSession } from "@anthropic-ai/claude-agent-sdk
 import { attachEventStream, broadcast, clientCount } from "./events.mjs";
 import { CanvasQueue, formatCanvasState, validateCommand } from "./canvas.mjs";
 import { StudyStore, formatStudyStats } from "./study.mjs";
-import { LearningStore, formatLearningContext, createLearningMcpServer } from "./learning.mjs";
+import { LearningStore, formatLearningContext, createLearningMcpServer, learningProgress } from "./learning.mjs";
 import { createAuth } from "./auth.mjs";
 import { HostIdentity } from "./identity.mjs";
 import { reachableAddresses } from "./network.mjs";
@@ -422,8 +422,13 @@ const captureBroker = new CaptureBroker({
   timeoutMs: Number(process.env.CANVAS_CAPTURE_TIMEOUT_MS || 30_000),
 });
 const studyStore = new StudyStore(WORKSPACE);
-/** Learning Mode: the global learner model (see learning.mjs). */
-const learningStore = new LearningStore(WORKSPACE);
+/** Learning Mode: one learner model per project (see learning.mjs). */
+const learningStore = new LearningStore(WORKSPACE, {
+  projectOf: async (rel) => {
+    const dir = await projectDirOf(assertInsideWorkspace(rel));
+    return dir ? relWorkspace(dir) : "";
+  },
+});
 const pdfIndex = new PdfIndex(WORKSPACE);
 
 /** @type {Map<string, { sessionId: string, cwd: string }>} */
@@ -1088,7 +1093,7 @@ function buildSystemPreamble() {
  * session once (see startAgentQuery); every turn gets ambient canvas/study
  * context plus the new request.
  */
-function buildPrompt({ message, openFile, savedDocs, canvasState, studyStats, learningCtx = null }) {
+function buildPrompt({ message, openFile, savedDocs, canvasState, studyStats, learningCtx = null, pageView = true }) {
   const canvasCtx = formatCanvasState(canvasState);
   const studyCtx = formatStudyStats(studyStats);
   const docMeta = [];
@@ -1122,6 +1127,11 @@ function buildPrompt({ message, openFile, savedDocs, canvasState, studyStats, le
 
   return [
     openFile ? `Open files on canvas: ${openFile}` : null,
+    pageView
+      ? null
+      : "[Page viewing is OFF] The user has not allowed you to look at their pages: " +
+        "mcp__canvas__view_pages is not available this turn. Do not try to see their handwriting; " +
+        "if you need it, ask them to type or describe it (they can allow page viewing in Settings → AI).",
     roleNotes.length ? ["", ...roleNotes].join("\n") : null,
     canvasCtx || null,
     studyCtx || null,
@@ -1190,9 +1200,23 @@ function toolArgsDetail(name, args) {
  * in order, and a completed block only contributes what the stream has not sent.
  */
 async function runChatAndStream({ iter, gen, chatId, onEvent, timeoutMs, handle }) {
+  /**
+   * All assistant prose of the turn. Every delta carries the whole of it: the app
+   * shows one answer per turn, so sending only the text since the last tool call
+   * replaced what the agent had written before it (e.g. before a learning tool).
+   */
   let text = "";
-  /** Assistant text since the last tool step — one bubble at a time. */
+  /** Assistant text since the last tool step. */
   let segment = "";
+  /** A tool step ended the previous stretch of prose; the next one is a new paragraph. */
+  let paragraphBreak = false;
+  const addText = (t) => {
+    if (!t) return;
+    if (paragraphBreak && text.trim()) text = text.trimEnd() + "\n\n";
+    paragraphBreak = false;
+    text += t;
+    segment += t;
+  };
   let lastStatus = "";
   let lastDeltaAt = 0;
   /** message id → { sent: text chars emitted, seen: chars of completed text blocks }. */
@@ -1227,12 +1251,12 @@ async function runChatAndStream({ iter, gen, chatId, onEvent, timeoutMs, handle 
     const now = Date.now();
     if (now - lastDeltaAt < 30) return;
     lastDeltaAt = now;
-    onEvent({ type: "delta", text: segment, fullText: text });
+    onEvent({ type: "delta", text, segment });
   };
 
   const finishCancelled = () => {
     const out = text && text.trim() ? text.trimEnd() + "\n\n(stopped)" : "(stopped)";
-    onEvent({ type: "delta", text: segment || out, fullText: out });
+    onEvent({ type: "delta", text: out, segment });
     return {
       result: {
         status: "cancelled",
@@ -1268,8 +1292,7 @@ async function runChatAndStream({ iter, gen, chatId, onEvent, timeoutMs, handle 
           } else if (ev.type === "content_block_delta") {
             if (ev.delta?.type === "text_delta" && typeof ev.delta.text === "string") {
               progressFor(curMsgId).sent += ev.delta.text.length;
-              text += ev.delta.text;
-              segment += ev.delta.text;
+              addText(ev.delta.text);
               emitDelta();
             } else if (ev.delta?.type === "thinking_delta") {
               emitStatus("thinking…");
@@ -1291,14 +1314,13 @@ async function runChatAndStream({ iter, gen, chatId, onEvent, timeoutMs, handle 
               p.sent = Math.max(p.sent, p.seen);
               const rest = full.slice(already); // only what the stream has not sent
               if (rest) {
-                text += rest;
-                segment += rest;
+                addText(rest);
                 emitDelta();
               }
             } else if (block.type === "tool_use") {
               // Flush any pending prose before the tool row.
               if (segment) {
-                onEvent({ type: "delta", text: segment, fullText: text });
+                onEvent({ type: "delta", text, segment });
                 lastDeltaAt = Date.now();
               }
               const name = block.name || "tool";
@@ -1307,8 +1329,9 @@ async function runChatAndStream({ iter, gen, chatId, onEvent, timeoutMs, handle 
               runningTools.set(block.id, { name, detail, step });
               onEvent({ type: "tool", name, detail, status: "running", message: step });
               emitStatus(`using ${name}${detail ? ` · ${detail}` : ""}…`);
-              // Next assistant prose is a new bubble.
+              // Next assistant prose starts a new paragraph of the same answer.
               segment = "";
+              paragraphBreak = true;
             }
           }
           continue;
@@ -1373,8 +1396,7 @@ async function runChatAndStream({ iter, gen, chatId, onEvent, timeoutMs, handle 
       segment += rest;
     }
     if (!text) text = finalText;
-    if (segment) onEvent({ type: "delta", text: segment, fullText: text });
-    else if (text) onEvent({ type: "delta", text, fullText: text });
+    if (text) onEvent({ type: "delta", text, segment });
 
     const normalized = {
       status: isError ? "error" : "success",
@@ -1434,6 +1456,8 @@ function startAgentQuery({
   canvasTools = false,
   learningTools = false,
   openFile = "",
+  project = "",
+  pageView = true,
 }) {
   const id = normalizeChatId(chatId);
   const { sessionId, fresh } = ensureSession(cwd, id);
@@ -1452,12 +1476,13 @@ function startAgentQuery({
       };
   if (model) options.model = model;
   // Chat runs may look at the tablet canvas — through tools, only when asked.
-  if (canvasTools) options.mcpServers = { canvas: createCanvasMcpServer(captureBroker) };
+  if (canvasTools) options.mcpServers = { canvas: createCanvasMcpServer(captureBroker, { pages: pageView }) };
   // Learning Mode: the learner model as tools (record evidence, goals, hint ladder).
   if (learningTools) {
     options.mcpServers = {
       ...(options.mcpServers || {}),
-      learning: createLearningMcpServer(learningStore, { chatId: id, openFile }),
+      // Only the chat's own project: the agent never sees another project's model.
+      learning: createLearningMcpServer(learningStore, { chatId: id, openFile, project }),
     };
   }
   if (fresh) options.sessionId = sessionId;
@@ -2298,7 +2323,11 @@ app.post("/file/write-binary", async (req, res) => {
     }
     // Learning Mode: an uploaded worksheet should get learning goals.
     if (req.body?.unique && learningStore.isEnabled()) {
-      await learningStore.notePendingDocument(path.relative(WORKSPACE, abs));
+      const projectDir = await projectDirOf(abs);
+      await learningStore.notePendingDocument(
+        path.relative(WORKSPACE, abs),
+        projectDir ? relWorkspace(projectDir) : ""
+      );
     }
     res.json({ ok: true, path: path.relative(WORKSPACE, abs), bytes: buf.length });
   } catch (e) {
@@ -2418,29 +2447,35 @@ app.get("/library/shared", async (req, res) => {
  * itself) holding a .ccproject marker. Lets the app enter a document's project when
  * the document is opened from elsewhere (recents, favourites, search).
  */
+async function projectDirOf(abs) {
+  let dir = abs;
+  try {
+    if (!(await fsp.stat(dir)).isDirectory()) dir = path.dirname(dir);
+  } catch {
+    dir = path.dirname(dir);
+  }
+  while (dir.startsWith(WORKSPACE) && dir !== WORKSPACE) {
+    if (await isProjectDir(dir)) return dir;
+    dir = path.dirname(dir);
+  }
+  return null;
+}
+
 app.get("/project-of", async (req, res) => {
   try {
     const rel = String(req.query.path || "");
     if (!rel) return res.status(400).json({ error: "path required" });
-    let dir = assertInsideWorkspace(rel);
-    try {
-      if (!(await fsp.stat(dir)).isDirectory()) dir = path.dirname(dir);
-    } catch {
-      dir = path.dirname(dir);
-    }
-    while (dir.startsWith(WORKSPACE) && dir !== WORKSPACE) {
-      if (await isProjectDir(dir)) {
-        let name = path.basename(dir);
-        try {
-          const marker = assertInsideWorkspace(path.join(dir, PROJECT_MARKER), { internal: true });
-          const meta = JSON.parse(await fsp.readFile(marker, "utf8"));
-          if (meta && typeof meta.name === "string" && meta.name.trim()) name = meta.name.trim();
-        } catch {
-          /* marker without JSON: folder name */
-        }
-        return res.json({ project: relWorkspace(dir), name });
+    const dir = await projectDirOf(assertInsideWorkspace(rel));
+    if (dir) {
+      let name = path.basename(dir);
+      try {
+        const marker = assertInsideWorkspace(path.join(dir, PROJECT_MARKER), { internal: true });
+        const meta = JSON.parse(await fsp.readFile(marker, "utf8"));
+        if (meta && typeof meta.name === "string" && meta.name.trim()) name = meta.name.trim();
+      } catch {
+        /* marker without JSON: folder name */
       }
-      dir = path.dirname(dir);
+      return res.json({ project: relWorkspace(dir), name });
     }
     res.json({ project: null });
   } catch (e) {
@@ -2830,7 +2865,7 @@ app.get("/file", async (req, res) => {
 });
 
 app.post("/chat/preview", async (req, res) => {
-  const { message, openFile = null, learningMode = null } = req.body || {};
+  const { message, openFile = null, learningMode = null, project = null, allowPageView = true } = req.body || {};
   if (message == null) {
     return res.status(400).json({ error: "message required" });
   }
@@ -2845,8 +2880,9 @@ app.post("/chat/preview", async (req, res) => {
       canvasState: await canvasQueue.getState(),
       studyStats: await studyStore.getStats(),
       learningCtx: learning
-        ? formatLearningContext(await learningStore.snapshot(), { openFile })
+        ? formatLearningContext(await learningStore.snapshot(typeof project === "string" ? project : ""), { openFile })
         : null,
+      pageView: allowPageView !== false,
     }),
   ].join("\n");
   res.json({ prompt, hasApiKey: claudeAuthAvailable() });
@@ -3063,7 +3099,18 @@ async function finishSession(s, payload) {
  * Run one chat turn to completion, independent of any HTTP request.
  * Resolves with the final payload; never throws.
  */
-async function runChatTurn({ s, id, prompt, imagePayload, timeoutMs, openFile, publicDocs, cwd, learning = false }) {
+async function runChatTurn({
+  s,
+  id,
+  prompt,
+  imagePayload,
+  timeoutMs,
+  openFile,
+  publicDocs,
+  cwd,
+  learning = false,
+  pageView = true,
+}) {
   const emit = (ev) => broadcastChat(s, ev);
   const agentCwd = cwd || WORKSPACE;
   try {
@@ -3091,6 +3138,8 @@ async function runChatTurn({ s, id, prompt, imagePayload, timeoutMs, openFile, p
         canvasTools: true,
         learningTools: learning,
         openFile: openFile || "",
+        project: s.project || "",
+        pageView,
       });
       s.agentId = sessionId;
 
@@ -3205,9 +3254,12 @@ async function handleChatRequest(req, res, { stream }) {
     chatId = "default",
     project = null,
     learningMode = null,
+    allowPageView = true,
   } = req.body || {};
   // The app sends its switch with every message; the stored setting is the fallback.
   const learning = typeof learningMode === "boolean" ? learningMode : learningStore.isEnabled();
+  // Settings → AI: whether the agent may look at the user's pages at all.
+  const pageView = allowPageView !== false;
   if (typeof message !== "string") {
     return res.status(400).json({ error: "message must be a string" });
   }
@@ -3268,10 +3320,13 @@ async function handleChatRequest(req, res, { stream }) {
       studyStats: await studyStore.getStats(),
       learningCtx: learning
         ? await (async () => {
-            for (const d of savedDocs) if (d.role !== "reference") await learningStore.notePendingDocument(d.path);
-            return formatLearningContext(await learningStore.snapshot(), { openFile });
+            for (const d of savedDocs) {
+              if (d.role !== "reference") await learningStore.notePendingDocument(d.path, s.project);
+            }
+            return formatLearningContext(await learningStore.snapshot(s.project), { openFile });
           })()
         : null,
+      pageView,
     });
   } catch (e) {
     const { message: message2, retryable } = mapAgentError(e);
@@ -3303,6 +3358,7 @@ async function handleChatRequest(req, res, { stream }) {
     publicDocs,
     cwd: agentCwd,
     learning,
+    pageView,
   });
 
   if (stream) {
@@ -3427,18 +3483,30 @@ app.post("/canvas/command", async (req, res) => {
 // ---- Learning Mode ------------------------------------------------------------------
 
 /** Mode + counts per level, for the app's settings line. */
-app.get("/learning/state", async (_req, res) => {
+/** ?project= picks the project (default: the workspace outside any project). */
+const learningProject = (req) => String(req.query?.project || req.body?.project || "");
+
+app.get("/learning/state", async (req, res) => {
   try {
-    res.json(await learningStore.summary());
+    res.json(await learningStore.summary(learningProject(req)));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-/** Everything, for inspection or export. */
-app.get("/learning/model", async (_req, res) => {
+/** The app's Learning view: one project's progress, topics and goals. */
+app.get("/learning/progress", async (req, res) => {
   try {
-    res.json(await learningStore.snapshot());
+    res.json(learningProgress(await learningStore.snapshot(learningProject(req))));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/** Everything (every project), for inspection or export; ?project= for just one. */
+app.get("/learning/model", async (req, res) => {
+  try {
+    res.json(req.query?.project != null ? await learningStore.snapshot(learningProject(req)) : await learningStore.snapshotAll());
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -3450,17 +3518,17 @@ app.post("/learning/mode", async (req, res) => {
       return res.status(400).json({ error: "enabled (boolean) required" });
     }
     await learningStore.setEnabled(req.body.enabled);
-    res.json(await learningStore.summary());
+    res.json(await learningStore.summary(learningProject(req)));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-/** Forget what the tutor has learned about the student (the mode stays as it is). */
-app.post("/learning/reset", async (_req, res) => {
+/** Forget what the tutor has learned in one project (the mode and other projects stay). */
+app.post("/learning/reset", async (req, res) => {
   try {
-    await learningStore.reset();
-    res.json(await learningStore.summary());
+    await learningStore.reset(learningProject(req));
+    res.json(await learningStore.summary(learningProject(req)));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

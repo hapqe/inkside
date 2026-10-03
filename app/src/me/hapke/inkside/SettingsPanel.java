@@ -181,8 +181,17 @@ final class SettingsPanel {
                         : "Off: no chat or dictation — a plain notebook",
                 act.aiEnabled, act::setAiEnabled));
         if (act.aiEnabled) {
-            // Global across all chats: each chat keeps its own conversation, the tutor
-            // shares one picture of what you know.
+            ai.add(settingsSwitchItem(act.agentSeesPages ? R.drawable.ic_visibility : R.drawable.ic_visibility_off,
+                    "Agent can see my pages",
+                    act.agentSeesPages
+                            ? "When you ask, the agent may look at your pages and handwriting"
+                            : "Off: the agent never sees your pages",
+                    act.agentSeesPages, on -> {
+                        act.setAgentSeesPages(on);
+                        repopulateOptionsCard();
+                    }));
+            // On in every chat at once; what the tutor knows about you is kept per
+            // project, and a chat only sees its own project's.
             ai.add(settingsSwitchItem(R.drawable.ic_bolt, "Learning Mode",
                     act.learningMode
                             ? "Adaptive tutor in every chat: hints before solutions, then it checks "
@@ -193,8 +202,11 @@ final class SettingsPanel {
                         repopulateOptionsCard();
                     }));
             if (act.learningMode && act.computers.hasHost()) {
+                ai.add(settingsItem(R.drawable.ic_lightbulb, "Learning progress",
+                        "Course progress, topics and goals in this project", null,
+                        v -> new LearningDialog(act).show()));
                 ai.add(settingsItem(R.drawable.ic_restart, "Reset learning progress",
-                        "Forget what the tutor has recorded about your understanding", null,
+                        "Forget what the tutor has recorded in this project", null,
                         v -> confirmLearningReset()));
                 refreshLearningProgress();
             }
@@ -217,7 +229,7 @@ final class SettingsPanel {
     private void refreshLearningProgress() {
         if (learningProgressLoading || act.bridge == null) return;
         learningProgressLoading = true;
-        act.bridge.learningState(new BridgeClient.Callback<org.json.JSONObject>() {
+        act.bridge.learningState(act.activeProjectPath, new BridgeClient.Callback<org.json.JSONObject>() {
             @Override
             public void onSuccess(org.json.JSONObject o) {
                 learningProgressLoading = false;
@@ -238,7 +250,7 @@ final class SettingsPanel {
 
     private static String describeLearning(org.json.JSONObject o) {
         int concepts = o.optInt("concepts", 0);
-        if (concepts == 0 && o.optInt("goals", 0) == 0) return "Nothing recorded yet";
+        if (concepts == 0 && o.optInt("goals", 0) == 0) return "Nothing recorded yet in this project";
         org.json.JSONObject c = o.optJSONObject("counts");
         int mastered = c != null ? c.optInt("mastered", 0) : 0;
         int applied = c != null ? c.optInt("applied", 0) + c.optInt("transferred", 0) : 0;
@@ -253,9 +265,9 @@ final class SettingsPanel {
 
     private void confirmLearningReset() {
         new android.app.AlertDialog.Builder(act)
-                .setMessage("Forget everything the tutor has recorded about what you know, and "
-                        + "all learning goals? Your chats stay as they are.")
-                .setPositiveButton("Reset", (d, w) -> act.bridge.resetLearning(
+                .setMessage("Forget everything the tutor has recorded about what you know in this "
+                        + "project, and its learning goals? Other projects and your chats stay as they are.")
+                .setPositiveButton("Reset", (d, w) -> act.bridge.resetLearning(act.activeProjectPath,
                         new BridgeClient.Callback<org.json.JSONObject>() {
                             @Override
                             public void onSuccess(org.json.JSONObject o) {

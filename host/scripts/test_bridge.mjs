@@ -514,7 +514,69 @@ async function main() {
     check("prompt block carries policy, model and goals",
       lCtx.includes("Learning Mode is ON") && lCtx.includes("chain rule") && lCtx.includes("Exercise 2")
       && lCtx.includes("c/new.pdf"));
+
+    // One learner model per project: a chat sees only its own project's.
+    await lStore.recordEvidence({ project: "Physics", concept: "Newton's laws", level: "explained", source: "tutor" });
+    await lStore.setGoals({ project: "Physics", document: "Physics/ws.pdf", goals: [{ task: "Problem 1" }] });
+    const physCtx = L.formatLearningContext(await lStore.snapshot("Physics"), { openFile: "Physics/ws.pdf" });
+    check("a project's prompt has its own concepts and goals",
+      physCtx.includes("newton's laws") || physCtx.includes("Newton's laws"));
+    check("a project's prompt has nothing from other projects",
+      !physCtx.includes("- chain rule:") && !physCtx.includes("c/new.pdf") && physCtx.includes("Problem 1"));
+    const rootCtx = L.formatLearningContext(await lStore.snapshot(""), { openFile: "c/sheet.pdf" });
+    check("the workspace's prompt has nothing from a project", !rootCtx.includes("Newton"));
+    check("the tutor's tools stay in the project too",
+      !(await lStore.snapshot("Physics/")).concepts["chain rule"]
+      && !!(await lStore.snapshot("/Physics")).concepts["newton's laws"]);
+    const prog = L.learningProgress(await lStore.snapshot(""));
+    check("progress counts topics, mastered ones and goals",
+      prog.topics.total >= 2 && prog.topics.mastered === 1 && prog.goals.total === 3
+      && prog.goals.solved_by_student === 1 && prog.progress > 0 && prog.progress < 1);
+    const physProg = L.learningProgress(await lStore.snapshot("Physics"));
+    check("progress is per project",
+      physProg.topics.items.every((t) => t.name !== "chain rule" && t.name !== "Chain rule"));
+    await lStore.reset("Physics");
+    check("reset forgets one project only",
+      Object.keys((await lStore.snapshot("Physics")).concepts).length === 0
+      && !!(await lStore.snapshot("")).concepts["chain rule"]);
     await fsp.rm(lws, { recursive: true, force: true });
+
+    // A model from before projects were kept apart is split up by project.
+    const mws = await fsp.mkdtemp(path.join(os.tmpdir(), "cc-learning-"));
+    await fsp.mkdir(path.join(mws, ".learning"), { recursive: true });
+    await fsp.writeFile(path.join(mws, ".learning", "state.json"), JSON.stringify({
+      version: 1, enabled: true,
+      concepts: {
+        "integrals": { name: "Integrals", level: "applied", evidence: [] },
+        "loose idea": { name: "Loose idea", level: "explained", evidence: [] },
+      },
+      goals: { "Math/sheet.pdf": { items: [{ id: "g1", task: "Ex 1", concepts: ["Integrals"], status: "open" }] } },
+      pendingDocs: ["Math/new.pdf", "other.pdf"],
+    }));
+    const mStore = new L.LearningStore(mws, { projectOf: async (doc) => (doc.startsWith("Math/") ? "Math" : "") });
+    await mStore.init();
+    const mMath = await mStore.snapshot("Math");
+    const mRoot = await mStore.snapshot("");
+    check("old goals move to their document's project", !!mMath.goals["Math/sheet.pdf"] && !mRoot.goals["Math/sheet.pdf"]);
+    check("old concepts follow the goals that name them", !!mMath.concepts["integrals"] && !mRoot.concepts["integrals"]);
+    check("other old concepts stay outside projects", !!mRoot.concepts["loose idea"] && !mMath.concepts["loose idea"]);
+    check("old pending documents move too", mMath.pendingDocs.includes("Math/new.pdf") && mRoot.pendingDocs.includes("other.pdf"));
+    check("the mode survives the move", mStore.isEnabled());
+    await fsp.rm(mws, { recursive: true, force: true });
+
+    // Page viewing switched off: no page tool, and the agent is told why.
+    const { createCanvasMcpServer: mkCanvas } = await import("../src/canvasTool.mjs");
+    const toolNames = (srv) => [...(srv.instance?._registeredTools ? Object.keys(srv.instance._registeredTools) : [])];
+    const withPages = toolNames(mkCanvas({}));
+    const noPages = toolNames(mkCanvas({}, { pages: false }));
+    if (withPages.length) {
+      check("page viewing off leaves view_pages out",
+        withPages.includes("view_pages") && !noPages.includes("view_pages") && noPages.includes("where"));
+    }
+    const pvOff = await json("POST", "/chat/preview", { message: "check my page", allowPageView: false });
+    check("page viewing off is in the prompt", (pvOff.body?.prompt || "").includes("Page viewing is OFF"));
+    const pvOn = await json("POST", "/chat/preview", { message: "check my page" });
+    check("page viewing is on by default", !(pvOn.body?.prompt || "").includes("Page viewing is OFF"));
 
     const lsOff = await json("GET", "/learning/state");
     check("learning mode off by default", lsOff.body?.enabled === false);

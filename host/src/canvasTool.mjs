@@ -102,66 +102,70 @@ function describe(info) {
   return `Open document: ${name} (${info.document}); the user is on page ${info.currentPage} of ${info.pageCount}.`;
 }
 
-/** Per-run MCP server exposing the canvas tools. */
-export function createCanvasMcpServer(broker) {
+/**
+ * Per-run MCP server exposing the canvas tools. `pages: false` (the user turned page
+ * viewing off) leaves view_pages out; the app refuses page captures then as well.
+ */
+export function createCanvasMcpServer(broker, { pages = true } = {}) {
+  const tools = [
+    tool(
+      "where",
+      "Which document and page the user currently has open on their tablet canvas. " +
+        "Text only. Use when the user refers to 'this page', 'here', 'my notes' and you need to know which.",
+      {},
+      async () => {
+        try {
+          const info = await broker.request("info");
+          return { content: [{ type: "text", text: describe(info) }] };
+        } catch (e) {
+          return { content: [{ type: "text", text: String(e.message || e) }], isError: true };
+        }
+      }
+    ),
+    tool(
+      "view_pages",
+      "Screenshots of the user's tablet canvas pages — the PDF with their handwriting, notes and images on it. " +
+        "Use ONLY when the user explicitly asks you to look at their canvas/page/notes/handwriting " +
+        "(e.g. 'check my solution', 'look at page 3', 'is my proof right?'). Not for general questions. " +
+        `pages: "current" (default: the page they are on), "all", a number, a range like "2-4", or a list like "1,3". ` +
+        `A proof or solution that runs over several pages: request the range. At most ${MAX_CAPTURE_PAGES} pages per call.`,
+      {
+        pages: z
+          .string()
+          .optional()
+          .describe('"current", "all", "3", "2-4" or "1,3,5" (1-based page numbers)'),
+      },
+      async (args) => {
+        try {
+          const spec = parsePageSpec(args?.pages);
+          const result = await broker.request("pages", spec);
+          const images = Array.isArray(result.images) ? result.images : [];
+          const content = [
+            {
+              type: "text",
+              text:
+                describe(result) +
+                (images.length
+                  ? ` Showing page${images.length > 1 ? "s" : ""} ${images.map((i) => i.page).join(", ")}.`
+                  : " No pages could be captured.") +
+                (result.truncated ? ` (Limited to ${MAX_CAPTURE_PAGES} pages.)` : ""),
+            },
+          ];
+          for (const img of images) {
+            if (!img?.data) continue;
+            content.push({ type: "text", text: `Page ${img.page}:` });
+            content.push({ type: "image", data: img.data, mimeType: img.mimeType || "image/jpeg" });
+          }
+          return { content };
+        } catch (e) {
+          return { content: [{ type: "text", text: String(e.message || e) }], isError: true };
+        }
+      }
+    ),
+  ];
   return createSdkMcpServer({
     name: "canvas",
     version: "1.0.0",
-    tools: [
-      tool(
-        "where",
-        "Which document and page the user currently has open on their tablet canvas. " +
-          "Text only. Use when the user refers to 'this page', 'here', 'my notes' and you need to know which.",
-        {},
-        async () => {
-          try {
-            const info = await broker.request("info");
-            return { content: [{ type: "text", text: describe(info) }] };
-          } catch (e) {
-            return { content: [{ type: "text", text: String(e.message || e) }], isError: true };
-          }
-        }
-      ),
-      tool(
-        "view_pages",
-        "Screenshots of the user's tablet canvas pages — the PDF with their handwriting, notes and images on it. " +
-          "Use ONLY when the user explicitly asks you to look at their canvas/page/notes/handwriting " +
-          "(e.g. 'check my solution', 'look at page 3', 'is my proof right?'). Not for general questions. " +
-          `pages: "current" (default: the page they are on), "all", a number, a range like "2-4", or a list like "1,3". ` +
-          `A proof or solution that runs over several pages: request the range. At most ${MAX_CAPTURE_PAGES} pages per call.`,
-        {
-          pages: z
-            .string()
-            .optional()
-            .describe('"current", "all", "3", "2-4" or "1,3,5" (1-based page numbers)'),
-        },
-        async (args) => {
-          try {
-            const spec = parsePageSpec(args?.pages);
-            const result = await broker.request("pages", spec);
-            const images = Array.isArray(result.images) ? result.images : [];
-            const content = [
-              {
-                type: "text",
-                text:
-                  describe(result) +
-                  (images.length
-                    ? ` Showing page${images.length > 1 ? "s" : ""} ${images.map((i) => i.page).join(", ")}.`
-                    : " No pages could be captured.") +
-                  (result.truncated ? ` (Limited to ${MAX_CAPTURE_PAGES} pages.)` : ""),
-              },
-            ];
-            for (const img of images) {
-              if (!img?.data) continue;
-              content.push({ type: "text", text: `Page ${img.page}:` });
-              content.push({ type: "image", data: img.data, mimeType: img.mimeType || "image/jpeg" });
-            }
-            return { content };
-          } catch (e) {
-            return { content: [{ type: "text", text: String(e.message || e) }], isError: true };
-          }
-        }
-      ),
-    ],
+    tools: pages ? tools : tools.filter((t) => t.name !== "view_pages"),
   });
 }

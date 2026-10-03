@@ -145,9 +145,11 @@ Settings → AI → **Learning Mode** (lightning icon) turns every chat into an
 adaptive tutor. The switch travels with each message (`learningMode` in
 `/chat/stream`) and is also stored on the host (`POST /learning/mode`).
 
-- **Global learner model, per-chat conversations.** What the student knows lives
-  in `workspace/.learning/state.json`, shared by all chats; each chat keeps its
-  own session. Concepts sit on a ladder: not_encountered → explained → recalled
+- **A learner model per project, per-chat conversations.** What the student
+  knows lives in `workspace/.learning/state.json`, one model per project
+  (documents outside any project share one), shared by that project's chats;
+  each chat keeps its own session. The agent only sees the model of the project
+  its chat runs in, in the prompt and through the tools. Concepts sit on a ladder: not_encountered → explained → recalled
   → applied → transferred → mastered. Only the student's own responses move a
   concept past "explained", and "mastered" needs "transferred" first — the
   store enforces both.
@@ -164,8 +166,16 @@ adaptive tutor. The switch travels with each message (`learningMode` in
 The agent works through the `learning` MCP tools (`learner_state`,
 `record_evidence`, `set_goals`, `hint_step`, `complete_goal`); the policy and a
 compact learner summary go into each turn's prompt while the mode is on.
-`GET /learning/state` (counts), `GET /learning/model` (everything) and
-`POST /learning/reset` are for the app.
+`GET /learning/state?project=` (counts), `GET /learning/model` (everything,
+or one project with `?project=`) and `POST /learning/reset` (`{project}`, one
+project only) are for the app.
+
+## Page viewing
+
+Settings → AI → **Agent can see my pages** decides whether the agent may take
+screenshots of the user's pages (`mcp__canvas__view_pages`). The switch travels
+with each message (`allowPageView` in `/chat/stream`); when it is off the host
+leaves the tool out and tells the agent so, and the app refuses page captures.
 
 ## Tests
 
