@@ -1057,7 +1057,7 @@ function buildSystemPreamble() {
     "Anything you would have written as prose in the artifact, say in chat instead.",
     "",
     "The artifact runtime is already there — do not rebuild any of it:",
-    "- Styling: /artifact-assets/artifact.css is linked into every artifact. It carries",
+    "- Styling: artifact-assets/artifact.css is linked into every artifact. It carries",
     "  the reset, light/dark palette, type scale and touch-sized controls. Write no CSS",
     "  reset, no colour scheme, no font stack. Use the classes: .art-figure for a figure,",
     "  .art-caption, .art-controls with .art-control for sliders and buttons, .art-note,",
@@ -3849,14 +3849,19 @@ app.use(
   express.static(path.join(ROOT, "assets"), { maxAge: 3600_000 })
 );
 
-const STYLE_INJECT = `
-<link rel="stylesheet" href="/artifact-assets/artifact.css">
+/*
+ * The injected links are relative to the page (`up` climbs from the artifact back to the
+ * host's root), so they also work when a proxy serves the host under a path such as
+ * https://example.com/inkside/.
+ */
+const STYLE_INJECT = (up) => `
+<link rel="stylesheet" href="${up}artifact-assets/artifact.css">
 `;
 
-const KATEX_INJECT = `
-<link rel="stylesheet" href="/katex/katex.min.css">
-<script src="/katex/katex.min.js"></script>
-<script src="/katex/auto-render.min.js"></script>
+const KATEX_INJECT = (up) => `
+<link rel="stylesheet" href="${up}katex/katex.min.css">
+<script src="${up}katex/katex.min.js"></script>
+<script src="${up}katex/auto-render.min.js"></script>
 <script>
 (function () {
   function go() {
@@ -4031,20 +4036,22 @@ app.get(/^\/artifacts\/(.+\.html)$/, async (req, res, next) => {
     const abs = await artifactFile(req.params[0]);
     if (!abs) return next();
     let html = await fsp.readFile(abs, "utf8");
+    // /artifacts/a/b.html → "../../" back to the host's root.
+    const up = "../".repeat(String(req.params[0]).split("/").length);
     // House styling goes in first so a page's own rules still win.
     if (!/artifact-assets\/artifact\.css/i.test(html)) {
       html = html.includes("</head>")
-        ? insertBefore(html, "</head>", STYLE_INJECT)
-        : STYLE_INJECT + html;
+        ? insertBefore(html, "</head>", STYLE_INJECT(up))
+        : STYLE_INJECT(up) + html;
     }
     // Skip only when the page already wires KaTeX itself (avoid double-inject).
     if (!/katex\.min\.(js|css)|renderMathInElement/i.test(html)) {
       if (html.includes("</body>")) {
-        html = insertBefore(html, "</body>", KATEX_INJECT);
+        html = insertBefore(html, "</body>", KATEX_INJECT(up));
       } else if (html.includes("</head>")) {
-        html = insertBefore(html, "</head>", KATEX_INJECT);
+        html = insertBefore(html, "</head>", KATEX_INJECT(up));
       } else {
-        html = html + KATEX_INJECT;
+        html = html + KATEX_INJECT(up);
       }
     }
     res.setHeader("Content-Type", "text/html; charset=utf-8");

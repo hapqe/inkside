@@ -90,12 +90,14 @@ who get the workspace and nothing else on the computer.
 
 **Over the internet**, put the host behind a TLS reverse proxy on a domain name and let it
 listen only locally (`HOST=127.0.0.1`). Devices then enter the bare name (`inkside.example.com`)
-and the token; the app uses HTTPS for names like that, no tailnet needed. Use a subdomain of
-its own (artifact pages use root paths), and let replies stream. With nginx:
+and the token; the app uses HTTPS for names like that, no tailnet needed. A path works too
+(`example.com/inkside`): pass it in `X-Forwarded-Prefix` so the login cookie stays on that path.
+Let replies stream. With nginx:
 
 ```nginx
-location / {
-    proxy_pass http://127.0.0.1:8787;
+location / {                        # or: location ^~ /inkside/ {
+    proxy_pass http://127.0.0.1:8787;   #     proxy_pass http://127.0.0.1:8787/;
+                                        #     proxy_set_header X-Forwarded-Prefix /inkside;
     proxy_http_version 1.1;
     proxy_set_header Connection "";
     proxy_set_header Host $host;

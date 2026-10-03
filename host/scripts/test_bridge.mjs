@@ -325,6 +325,13 @@ async function main() {
       artHtml.includes('{ left: "$", right: "$", display: false }')
     );
     check("page body kept", artHtml.includes("inline $x$ and display $$y$$"));
+    // Relative links, so the host also works under a proxy path (https://example.com/inkside/).
+    check("injected links are relative to the page",
+      artHtml.includes('href="../artifact-assets/artifact.css"') && artHtml.includes('src="../katex/katex.min.js"'));
+    await fsp.mkdir(path.join(ws, ".artifacts", "deep"), { recursive: true });
+    await fsp.writeFile(path.join(ws, ".artifacts", "deep", "n.html"), "<html><head></head><body>n</body></html>");
+    const nested = await (await fetch(BASE + "/artifacts/deep/n.html")).text();
+    check("…and climb back from nested artifacts", nested.includes('href="../../artifact-assets/artifact.css"'));
 
     console.log("\nstudy store");
     await json("POST", "/study/reviews", {
@@ -794,6 +801,12 @@ async function main() {
         headers: { Cookie: cookie.split(";")[0] },
       });
       check("cookie authenticates follow-up requests", viaCookie.status === 200);
+      check("the cookie covers the whole host when served at the root", /Path=\/;/.test(cookie));
+      const prefixed = await fetch(AUTH_BASE + "/files?path=.&token=s3cret-token", {
+        headers: { "X-Forwarded-Prefix": "/inkside" },
+      });
+      check("behind a proxy path the cookie stays on that path",
+        /Path=\/inkside;/.test(prefixed.headers.get("set-cookie") || ""));
 
       console.log("\nshared host (a token means guests)");
       const tok = { Authorization: "Bearer s3cret-token", "Content-Type": "application/json" };

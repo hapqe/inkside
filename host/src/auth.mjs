@@ -54,6 +54,15 @@ function cookieValue(req, name) {
   return null;
 }
 
+/**
+ * Where the cookie applies: the path a proxy serves the host under (X-Forwarded-Prefix,
+ * e.g. "/inkside"), so the token is not sent to other sites on the same domain.
+ */
+function cookiePath(req) {
+  const prefix = String(req.headers?.["x-forwarded-prefix"] || "").trim();
+  return /^\/[A-Za-z0-9._~\-/]*$/.test(prefix) ? prefix.replace(/\/+$/, "") || "/" : "/";
+}
+
 /** "host:port" / "[v6]:port" → bare lowercase host name or address. */
 function hostName(hostHeader) {
   const h = String(hostHeader || "").trim().toLowerCase();
@@ -152,7 +161,7 @@ export function createAuth(opts = {}) {
         // Let the page's own relative requests (assets, fetches) authenticate too.
         res.setHeader(
           "Set-Cookie",
-          `${COOKIE}=${encodeURIComponent(p.value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`
+          `${COOKIE}=${encodeURIComponent(p.value)}; Path=${cookiePath(req)}; HttpOnly; SameSite=Lax; Max-Age=31536000`
         );
       }
       return next();
