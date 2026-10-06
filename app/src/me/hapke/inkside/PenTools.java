@@ -116,10 +116,59 @@ final class PenTools {
         return pen().slots;
     }
 
+    /** The pen button: the pen's own brush (back from the highlighter, tape or shapes). */
+    void selectPen() {
+        if (!CodeCanvasView.isPenBrush(act.brush)) {
+            setBrush(CodeCanvasView.isPenBrush(act.penBrush) ? act.penBrush : CodeCanvasView.BRUSH_INK);
+        }
+        selectPencil(act.selectedColorIndex);
+    }
+
+    /** The tape button: drag to lay tape over something; tap a tape to lift it. */
+    void selectTape() {
+        if (act.brush != CodeCanvasView.BRUSH_TAPE) setBrush(CodeCanvasView.BRUSH_TAPE);
+        selectPencil(act.selectedColorIndex);
+    }
+
+    /** The shapes button: drag out the chosen shape; a tap places one. */
+    void selectShape() {
+        if (act.brush != CodeCanvasView.BRUSH_SHAPE) setBrush(CodeCanvasView.BRUSH_SHAPE);
+        applyShapeStyle();
+        selectPencil(act.selectedColorIndex);
+    }
+
+    /**
+     * Where the stylus's primary button goes back to: the pen or the highlighter,
+     * whichever was picked last (from tape or shapes too).
+     */
+    void selectWritingTool(boolean dropSelection) {
+        int want = act.writingBrush == CodeCanvasView.BRUSH_HIGHLIGHTER
+                ? CodeCanvasView.BRUSH_HIGHLIGHTER
+                : (CodeCanvasView.isPenBrush(act.penBrush) ? act.penBrush : CodeCanvasView.BRUSH_INK);
+        if (act.brush != want) setBrush(want);
+        selectPencil(act.selectedColorIndex, dropSelection);
+    }
+
+    /**
+     * The highlighter button. It is the pen with the highlighter brush and keeps its own
+     * colours and size, like every brush; the stylus's primary button goes back to it
+     * when it was the last drawing tool picked.
+     */
+    void selectHighlighter() {
+        if (act.brush != CodeCanvasView.BRUSH_HIGHLIGHTER) setBrush(CodeCanvasView.BRUSH_HIGHLIGHTER);
+        selectPencil(act.selectedColorIndex);
+    }
+
+    boolean highlighterOn() {
+        return act.brush == CodeCanvasView.BRUSH_HIGHLIGHTER;
+    }
+
     private void setBrush(int b) {
         if (act.brush == b || b < 0 || b >= act.pens.length) return;
         pen().selected = act.selectedColorIndex;
         act.brush = b;
+        if (CodeCanvasView.isPenBrush(b)) act.penBrush = b;
+        if (CodeCanvasView.isPenBrush(b) || b == CodeCanvasView.BRUSH_HIGHLIGHTER) act.writingBrush = b;
         if (act.canvas != null) act.canvas.setBrush(b);
         act.selectedColorIndex = pen().selected;
         applyPenProperties();
@@ -245,9 +294,13 @@ final class PenTools {
         col.setPadding(0, act.dp(MainActivity.SPACE_XS), 0, act.dp(MainActivity.SPACE_SM));
         col.addView(toolMenuLabel("Brush"));
         final List<View> chips = new ArrayList<>();
+        final List<Integer> chipBrushes = new ArrayList<>();
         LinearLayout row = null;
+        int n = 0;
+        // Highlighter, tape and shapes have slots of their own in the toolbar.
         for (int b = 0; b < CodeCanvasView.BRUSH_COUNT; b++) {
-            if (b % 2 == 0) {
+            if (!CodeCanvasView.isPenBrush(b)) continue;
+            if (n++ % 2 == 0) {
                 row = new LinearLayout(act);
                 row.setOrientation(LinearLayout.HORIZONTAL);
                 LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
@@ -275,20 +328,306 @@ final class PenTools {
             chip.setContentDescription(CodeCanvasView.BRUSH_LABELS[b]);
             chip.setOnClickListener(v -> {
                 setBrush(brushId);
-                for (int i = 0; i < chips.size(); i++) styleBrushChip(chips.get(i), i == act.brush);
+                for (int i = 0; i < chips.size(); i++) styleBrushChip(chips.get(i), chipBrushes.get(i) == act.brush);
                 for (View c : chips) ((ViewGroup) c).getChildAt(0).invalidate();
             });
             styleBrushChip(chip, b == act.brush);
             chips.add(chip);
+            chipBrushes.add(b);
             LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
                     0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-            if (b % 2 == 0) clp.rightMargin = act.dp(MainActivity.SPACE_MD);
+            if (n % 2 == 1) clp.rightMargin = act.dp(MainActivity.SPACE_MD);
             row.addView(chip, clp);
         }
-        if (CodeCanvasView.BRUSH_COUNT % 2 == 1 && row != null) {
+        if (n % 2 == 1 && row != null) {
             row.addView(new View(act), new LinearLayout.LayoutParams(0, 1, 1f));
         }
         return col;
+    }
+
+    // ---- Shape tool ----------------------------------------------------------------
+
+    /** Puts the shape tool's settings on the canvas. */
+    void applyShapeStyle() {
+        if (act.canvas != null) {
+            act.canvas.setShapeStyle(act.shapeKind, act.shapeFill, act.shapeBorder, act.shapeBorderWidth);
+        }
+    }
+
+    /**
+     * The option row while the shape tool is in hand, as a run of borderless chips of
+     * one height: the shape (opens the picker), fill, border, and the border's width.
+     */
+    LinearLayout buildShapeOptionsRow() {
+        LinearLayout row = new LinearLayout(act);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+
+        LinearLayout kind = optionChip(null, () -> showShapePicker());
+        kind.setContentDescription("Choose shape");
+        act.shapeKindButton = new ImageView(act);
+        kind.addView(act.shapeKindButton, 0, new LinearLayout.LayoutParams(act.dp(22), act.dp(22)));
+        ImageView more = new ImageView(act);
+        more.setImageResource(R.drawable.ic_expand_more);
+        more.setColorFilter(act.M3_ON_SURFACE_VARIANT);
+        LinearLayout.LayoutParams ml = new LinearLayout.LayoutParams(act.dp(18), act.dp(18));
+        ml.leftMargin = act.dp(2);
+        kind.addView(more, ml);
+        row.addView(kind, chipLp(false));
+
+        LinearLayout fill = optionChip("Fill", () -> showShapeColorPicker(true));
+        act.shapeFillSwatch = new View(act);
+        fill.addView(act.shapeFillSwatch, 0, new LinearLayout.LayoutParams(act.dp(20), act.dp(20)));
+        row.addView(fill, chipLp(true));
+
+        LinearLayout border = optionChip("Border", () -> showShapeColorPicker(false));
+        act.shapeBorderSwatch = new View(act);
+        border.addView(act.shapeBorderSwatch, 0, new LinearLayout.LayoutParams(act.dp(20), act.dp(20)));
+        row.addView(border, chipLp(true));
+
+        // Width: the slider inside a chip of its own, with the value at its end.
+        LinearLayout width = optionChip(null, null);
+        width.setPadding(act.dp(12), 0, act.dp(12), 0);
+        TextView label = chipText("Width");
+        width.addView(label);
+        Material3Slider slider = new Material3Slider(act);
+        shapeWidthSlider = slider;
+        slider.setMax(24);
+        slider.setProgress(Math.round(act.shapeBorderWidth));
+        slider.setContentDescription("Border width");
+        act.tintSeekBar(slider);
+        final TextView value = chipText(String.valueOf(Math.round(act.shapeBorderWidth)));
+        value.setMinWidth(act.dp(18));
+        value.setGravity(Gravity.END);
+        slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                value.setText(String.valueOf(progress));
+                if (!fromUser) return;
+                act.shapeBorderWidth = progress;
+                applyShapeStyle();
+                refreshShapeOptions();
+            }
+
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {
+                act.persistence.scheduleSave();
+            }
+        });
+        LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(act.dp(112), act.dp(32));
+        sl.leftMargin = act.dp(4);
+        width.addView(slider, sl);
+        width.addView(value);
+        row.addView(width, chipLp(true));
+        return row;
+    }
+
+    private static final int CHIP_H = 40;
+
+    /** A borderless chip: [content…] label, the whole thing tappable. */
+    private LinearLayout optionChip(String label, Runnable onTap) {
+        LinearLayout chip = new LinearLayout(act);
+        chip.setOrientation(LinearLayout.HORIZONTAL);
+        chip.setGravity(Gravity.CENTER_VERTICAL);
+        chip.setPadding(act.dp(10), 0, act.dp(14), 0);
+        // No box: the press shows as a rounded ripple only.
+        if (onTap != null) {
+            GradientDrawable mask = new GradientDrawable();
+            mask.setColor(0xFFFFFFFF);
+            mask.setCornerRadius(act.dp(12));
+            chip.setBackground(new android.graphics.drawable.RippleDrawable(
+                    android.content.res.ColorStateList.valueOf((act.M3_PRIMARY & 0x00FFFFFF) | 0x33000000),
+                    null, mask));
+            chip.setClickable(true);
+            chip.setOnClickListener(v -> onTap.run());
+            chip.setContentDescription(label);
+        }
+        if (label != null) {
+            TextView t = chipText(label);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.leftMargin = act.dp(8);
+            chip.addView(t, lp);
+        }
+        return chip;
+    }
+
+    private TextView chipText(String s) {
+        TextView t = new TextView(act);
+        t.setText(s);
+        t.setTextColor(act.M3_ON_SURFACE);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        t.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        t.setSingleLine(true);
+        return t;
+    }
+
+    private LinearLayout.LayoutParams chipLp(boolean gapBefore) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, act.dp(CHIP_H));
+        lp.gravity = Gravity.CENTER_VERTICAL;
+        if (gapBefore) lp.leftMargin = act.dp(8);
+        return lp;
+    }
+
+    /** A colour disc; "none" is a ring with a slash. */
+    private android.graphics.drawable.Drawable colorDisc(int color) {
+        if ((color >>> 24) == 0) {
+            return new android.graphics.drawable.Drawable() {
+                final android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+
+                @Override
+                public void draw(android.graphics.Canvas c) {
+                    android.graphics.Rect b = getBounds();
+                    float r = Math.min(b.width(), b.height()) / 2f - act.dp(1);
+                    p.setStyle(android.graphics.Paint.Style.STROKE);
+                    p.setStrokeWidth(act.getResources().getDisplayMetrics().density * 1.5f);
+                    p.setColor(act.M3_ON_SURFACE_VARIANT);
+                    c.drawCircle(b.exactCenterX(), b.exactCenterY(), r, p);
+                    float d = r * 0.7f;
+                    c.drawLine(b.exactCenterX() - d, b.exactCenterY() + d, b.exactCenterX() + d, b.exactCenterY() - d, p);
+                }
+
+                @Override public void setAlpha(int a) {}
+
+                @Override public void setColorFilter(android.graphics.ColorFilter cf) {}
+
+                @Override public int getOpacity() {
+                    return android.graphics.PixelFormat.TRANSLUCENT;
+                }
+            };
+        }
+        android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+        g.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+        g.setColor(color);
+        g.setStroke(act.dp(1), (act.M3_OUTLINE_VARIANT & 0x00FFFFFF) | 0x99000000);
+        return g;
+    }
+
+    private Material3Slider shapeWidthSlider;
+
+    void refreshShapeOptions() {
+        // Built before the theme was applied: take its colours now, as the pen's sliders do.
+        if (shapeWidthSlider != null) act.tintSeekBar(shapeWidthSlider);
+        if (act.shapeKindButton != null) {
+            act.shapeKindButton.setImageDrawable(new ShapeIconDrawable(act.shapeKind,
+                    (act.shapeBorder >>> 24) != 0 ? act.shapeBorder : act.M3_ON_SURFACE_VARIANT,
+                    act.shapeFill, act.getResources().getDisplayMetrics().density * 1.8f));
+        }
+        if (act.shapeFillSwatch != null) act.shapeFillSwatch.setBackground(colorDisc(act.shapeFill));
+        if (act.shapeBorderSwatch != null) act.shapeBorderSwatch.setBackground(colorDisc(act.shapeBorder));
+    }
+
+    /** Every shape in a grid, drawn in the current fill and border; a tap picks one. */
+    private void showShapePicker() {
+        int cols = 6;
+        LinearLayout grid = new LinearLayout(act);
+        grid.setOrientation(LinearLayout.VERTICAL);
+        final M3Dialog[] dialog = new M3Dialog[1];
+        int stroke = (act.shapeBorder >>> 24) != 0 ? act.shapeBorder : act.M3_ON_SURFACE;
+        LinearLayout row = null;
+        for (int k = 0; k < ShapeLibrary.count(); k++) {
+            if (k % cols == 0) {
+                row = new LinearLayout(act);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                grid.addView(row, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            }
+            final int kind = k;
+            ImageView cell = new ImageView(act);
+            cell.setImageDrawable(new ShapeIconDrawable(k, stroke, act.shapeFill, act.getResources().getDisplayMetrics().density * 1.6f));
+            int pad = act.dp(10);
+            cell.setPadding(pad, pad, pad, pad);
+            cell.setContentDescription(ShapeLibrary.NAMES[k]);
+            android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+            bg.setCornerRadius(act.dp(14));
+            if (k == act.shapeKind) {
+                bg.setColor(act.M3_PRIMARY_CONTAINER | 0xFF000000);
+            } else {
+                bg.setColor(0);
+            }
+            cell.setBackground(bg);
+            cell.setOnClickListener(v -> {
+                act.shapeKind = kind;
+                applyShapeStyle();
+                refreshShapeOptions();
+                act.persistence.scheduleSave();
+                if (dialog[0] != null) dialog[0].dismiss();
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, act.dp(56), 1f);
+            lp.setMargins(act.dp(2), act.dp(2), act.dp(2), act.dp(2));
+            row.addView(cell, lp);
+        }
+        int rest = ShapeLibrary.count() % cols;
+        if (rest != 0 && row != null) {
+            for (int i = rest; i < cols; i++) row.addView(new View(act), new LinearLayout.LayoutParams(0, 1, 1f));
+        }
+        dialog[0] = new M3Dialog.Builder(act)
+                .setTitle("Shapes")
+                .setView(grid)
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    /** Colours for fill or border: none, greys, the pen's colours and the favourites. */
+    private void showShapeColorPicker(boolean fill) {
+        java.util.LinkedHashSet<Integer> set = new java.util.LinkedHashSet<>();
+        set.add(0);
+        for (int c : new int[]{0xFFFFFFFF, 0xFFBDBDBD, 0xFF616161, 0xFF000000}) set.add(c);
+        for (int c : act.pens[CodeCanvasView.BRUSH_INK].slots) set.add(c | 0xFF000000);
+        for (int c : act.pens[CodeCanvasView.BRUSH_TAPE].slots) set.add(c | 0xFF000000);
+        for (int c : act.favoriteColors) {
+            if (set.size() >= 24) break;
+            set.add(c | 0xFF000000);
+        }
+        final int current = fill ? act.shapeFill : act.shapeBorder;
+        int cols = 6;
+        LinearLayout grid = new LinearLayout(act);
+        grid.setOrientation(LinearLayout.VERTICAL);
+        final M3Dialog[] dialog = new M3Dialog[1];
+        LinearLayout row = null;
+        int i = 0;
+        for (int c : set) {
+            if (i++ % cols == 0) {
+                row = new LinearLayout(act);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                grid.addView(row, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            }
+            final int color = c;
+            android.widget.FrameLayout cell = new android.widget.FrameLayout(act);
+            View disc = new View(act);
+            disc.setBackground(colorDisc(c));
+            cell.addView(disc, new android.widget.FrameLayout.LayoutParams(act.dp(34), act.dp(34), Gravity.CENTER));
+            if (c == current) {
+                android.graphics.drawable.GradientDrawable ring = new android.graphics.drawable.GradientDrawable();
+                ring.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+                ring.setStroke(Math.round(act.getResources().getDisplayMetrics().density * 2.5f), act.M3_PRIMARY);
+                View ringView = new View(act);
+                ringView.setBackground(ring);
+                cell.addView(ringView, new android.widget.FrameLayout.LayoutParams(act.dp(44), act.dp(44), Gravity.CENTER));
+            }
+            cell.setContentDescription(c == 0 ? "None" : PenTools.colorNameFor(c));
+            cell.setOnClickListener(v -> {
+                if (fill) act.shapeFill = color;
+                else act.shapeBorder = color;
+                applyShapeStyle();
+                refreshShapeOptions();
+                act.persistence.scheduleSave();
+                if (dialog[0] != null) dialog[0].dismiss();
+            });
+            row.addView(cell, new LinearLayout.LayoutParams(0, act.dp(52), 1f));
+        }
+        int rest = set.size() % cols;
+        if (rest != 0 && row != null) {
+            for (int k = rest; k < cols; k++) row.addView(new View(act), new LinearLayout.LayoutParams(0, 1, 1f));
+        }
+        dialog[0] = new M3Dialog.Builder(act)
+                .setTitle(fill ? "Fill" : "Border")
+                .setView(grid)
+                .setNegativeButton("Close", null)
+                .show();
     }
 
     /** The pen icon for the extra stroke settings wears the theme's primary colour. */
@@ -380,7 +719,7 @@ final class PenTools {
         }
         // Button up. Tip contact = erase; only a real hover flick picks a favorite.
         if (act.canvas != null && (act.canvas.isStylusTipDown() || act.canvas.wasTipUsedOnFavoritesHold())) {
-            act.canvas.keepEraserUntilTipUp(() -> selectPencil(act.selectedColorIndex, false));
+            act.canvas.keepEraserUntilTipUp(() -> selectWritingTool(false));
             return;
         }
         // With a selection up, a press just goes back to the pen: the selection ends
@@ -388,7 +727,7 @@ final class PenTools {
         if (act.canvas != null && (act.canvas.hasActiveSelection() || act.canvas.hasLassoRegion())) {
             act.canvas.releaseFavoritesRadialGesture();
             act.canvas.clearPenEraseArm();
-            selectPencil(act.selectedColorIndex);
+            selectWritingTool(true);
             return;
         }
         if (act.canvas != null && act.canvas.isQuickFavoritesEnabled()
@@ -399,18 +738,18 @@ final class PenTools {
             act.canvas.finishFavoritesPress(
                     () -> {
                         act.canvas.clearPenEraseArm();
-                        selectPencil(act.selectedColorIndex, false);
+                        selectWritingTool(false);
                     },
                     () -> act.canvas.keepEraserUntilTipUp(
-                            () -> selectPencil(act.selectedColorIndex, false)));
+                            () -> selectWritingTool(false)));
             return;
         }
         if (act.canvas != null) {
             act.canvas.releaseFavoritesRadialGesture();
-            act.canvas.keepEraserUntilTipUp(() -> selectPencil(act.selectedColorIndex, false));
+            act.canvas.keepEraserUntilTipUp(() -> selectWritingTool(false));
             return;
         }
-        selectPencil(act.selectedColorIndex, false);
+        selectWritingTool(false);
     }
 
     /** Secondary role: lasso on press. */
@@ -919,6 +1258,7 @@ final class PenTools {
         act.selectedColorIndex = index;
         pen().selected = index;
         act.stopwatchSelected = false;
+        act.stickersSelected = false;
         act.eraserSelected = false;
         act.lassoSelected = false;
         act.textSelected = false;
@@ -940,6 +1280,7 @@ final class PenTools {
                 : act.lassoSelected ? CodeCanvasView.Tool.LASSO : CodeCanvasView.Tool.PENCIL;
         inkBeforeText = act.selectedColorIndex;
         act.stopwatchSelected = false;
+        act.stickersSelected = false;
         act.hideSoftKeyboard();
         if (act.canvas != null) act.canvas.requestFocus();
         act.eraserSelected = false;
@@ -972,6 +1313,7 @@ final class PenTools {
         act.hideSoftKeyboard();
         if (act.canvas != null) act.canvas.requestFocus();
         act.stopwatchSelected = false;
+        act.stickersSelected = false;
         act.eraserSelected = true;
         act.lassoSelected = false;
         act.textSelected = false;
@@ -986,6 +1328,7 @@ final class PenTools {
         act.hideSoftKeyboard();
         if (act.canvas != null) act.canvas.requestFocus();
         act.stopwatchSelected = false;
+        act.stickersSelected = false;
         act.eraserSelected = false;
         act.lassoSelected = true;
         act.textSelected = false;
@@ -995,7 +1338,14 @@ final class PenTools {
 
     void refreshToolSelection() {
         boolean pencil = !act.eraserSelected && !act.lassoSelected && !act.textSelected;
-        if (act.pencilButton != null) act.applyIconSelected(act.pencilButton, pencil);
+        int b = act.brush;
+        boolean shapes = pencil && b == CodeCanvasView.BRUSH_SHAPE;
+        // The stopwatch and the sticker strip take the option row over while open.
+        boolean panel = act.stopwatchSelected || act.stickersSelected;
+        if (act.pencilButton != null) act.applyIconSelected(act.pencilButton, pencil && CodeCanvasView.isPenBrush(b));
+        if (act.highlighterButton != null) act.applyIconSelected(act.highlighterButton, pencil && highlighterOn());
+        if (act.tapeButton != null) act.applyIconSelected(act.tapeButton, pencil && b == CodeCanvasView.BRUSH_TAPE);
+        if (act.shapesButton != null) act.applyIconSelected(act.shapesButton, shapes);
         if (act.eraserButton != null) act.applyIconSelected(act.eraserButton, act.eraserSelected);
         if (act.lassoButton != null) act.applyIconSelected(act.lassoButton, act.lassoSelected);
         if (act.textToolButton != null) act.applyIconSelected(act.textToolButton, act.textSelected);
@@ -1010,20 +1360,26 @@ final class PenTools {
 
         // The stopwatch panel takes the option row over from the drawing tool's options.
         if (act.pencilOptions != null) {
-            act.pencilOptions.setVisibility(pencil && !act.stopwatchSelected ? View.VISIBLE : View.GONE);
+            act.pencilOptions.setVisibility(pencil && !shapes && !panel ? View.VISIBLE : View.GONE);
+        }
+        if (act.shapeOptions != null) {
+            act.shapeOptions.setVisibility(shapes && !panel ? View.VISIBLE : View.GONE);
+            if (shapes) refreshShapeOptions();
         }
         if (act.targetOptions != null) {
-            act.targetOptions.setVisibility(act.lassoSelected && !act.stopwatchSelected ? View.VISIBLE : View.GONE);
+            act.targetOptions.setVisibility(act.lassoSelected && !panel ? View.VISIBLE : View.GONE);
         }
         if (act.eraserOptions != null) {
-            act.eraserOptions.setVisibility(act.eraserSelected && !act.stopwatchSelected ? View.VISIBLE : View.GONE);
+            act.eraserOptions.setVisibility(act.eraserSelected && !panel ? View.VISIBLE : View.GONE);
         }
         refreshSizeDots();
         if (act.textDefaultsOptions != null) {
-            act.textDefaultsOptions.setVisibility(act.textSelected && !act.stopwatchSelected ? View.VISIBLE : View.GONE);
+            act.textDefaultsOptions.setVisibility(act.textSelected && !panel ? View.VISIBLE : View.GONE);
             if (act.textSelected) act.textTools.refreshTextDefaultsRow();
         }
         if (act.stopwatch != null) act.stopwatch.setVisibility(act.stopwatchSelected ? View.VISIBLE : View.GONE);
+        if (act.stickerStrip != null) act.stickerStrip.setVisibility(act.stickersSelected ? View.VISIBLE : View.GONE);
+        if (act.stickersButton != null) act.applyIconSelected(act.stickersButton, act.stickersSelected);
         act.refreshStopwatchButton();
         refreshToolOptionRow();
         refreshLassoChips();
@@ -1084,6 +1440,8 @@ final class PenTools {
         if (act.toolRowOptions == null) return;
         boolean anyVisible =
                 (act.pencilOptions != null && act.pencilOptions.getVisibility() == View.VISIBLE)
+                        || (act.shapeOptions != null && act.shapeOptions.getVisibility() == View.VISIBLE)
+                        || (act.stickerStrip != null && act.stickerStrip.getVisibility() == View.VISIBLE)
                         || (act.targetOptions != null && act.targetOptions.getVisibility() == View.VISIBLE)
                         || (act.eraserOptions != null && act.eraserOptions.getVisibility() == View.VISIBLE)
                         || (act.textDefaultsOptions != null && act.textDefaultsOptions.getVisibility() == View.VISIBLE)

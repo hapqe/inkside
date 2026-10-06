@@ -9,7 +9,6 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
-import android.widget.PopupMenu;
 import java.io.InputStream;
 
 /**
@@ -86,8 +85,6 @@ final class CanvasPaste {
     private float canvasCtxWorldX;
     private float canvasCtxWorldY;
     private int canvasCtxPageIndex = -1;
-    /** 1×1 anchor so {@link PopupMenu} opens at the long-press point. */
-    private View canvasCtxAnchor;
 
     void showCanvasLongPressMenu(float worldX, float worldY,
                                          float screenX, float screenY) {
@@ -105,55 +102,30 @@ final class CanvasPaste {
         final boolean canDelete = act.canvas.canDeleteDocumentPage(canvasCtxPageIndex);
         if (!canPaste && !canPasteInk && !canDelete) return;
 
-        ViewGroup parent = act.canvas.getParent() instanceof ViewGroup
-                ? (ViewGroup) act.canvas.getParent() : null;
-        if (parent == null) return;
-        if (canvasCtxAnchor == null) {
-            canvasCtxAnchor = new View(act);
-            parent.addView(canvasCtxAnchor, new FrameLayout.LayoutParams(1, 1));
-        }
-        int[] parentLoc = new int[2];
-        parent.getLocationOnScreen(parentLoc);
-        int[] canvasLoc = new int[2];
-        act.canvas.getLocationOnScreen(canvasLoc);
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(1, 1);
-        lp.gravity = Gravity.TOP | Gravity.START;
-        lp.leftMargin = Math.round(canvasLoc[0] - parentLoc[0] + screenX);
-        lp.topMargin = Math.round(canvasLoc[1] - parentLoc[1] + screenY);
-        canvasCtxAnchor.setLayoutParams(lp);
-
-        PopupMenu popup = new PopupMenu(act, canvasCtxAnchor, Gravity.TOP | Gravity.START);
+        M3Menu menu = new M3Menu(act);
         if (canPasteInk) {
-            popup.getMenu().add(0, MENU_CANVAS_PASTE_INK, 0, "Paste handwriting");
-        }
-        if (canPaste) {
-            popup.getMenu().add(0, MENU_CANVAS_PASTE, 0, canPasteInk ? "Paste from clipboard" : "Paste");
-        }
-        if (canDelete) {
-            popup.getMenu().add(0, MENU_CANVAS_DELETE_PAGE, 1, "Delete Page");
-        }
-        popup.setOnMenuItemClickListener(item -> {
-            int id = item.getItemId();
-            if (id == MENU_CANVAS_PASTE_INK) {
+            menu.add(R.drawable.ic_paste, "Paste handwriting", () -> {
                 if (act.canvas != null && act.canvas.pasteClipboardAt(canvasCtxWorldX, canvasCtxWorldY)) {
                     act.persistence.scheduleSave();
                 }
-                return true;
-            }
-            if (id == MENU_CANVAS_PASTE) {
+            });
+        }
+        if (canPaste) {
+            menu.add(R.drawable.ic_paste, canPasteInk ? "Paste from clipboard" : "Paste", () -> {
                 if (tryPasteImageAt(canvasCtxWorldX, canvasCtxWorldY)
                         || tryPasteTextAt(canvasCtxWorldX, canvasCtxWorldY)) {
                     act.persistence.scheduleSave();
                 }
-                return true;
-            }
-            if (id == MENU_CANVAS_DELETE_PAGE) {
-                act.documents.deleteDocumentPageAt(canvasCtxPageIndex);
-                return true;
-            }
-            return false;
-        });
-        popup.show();
+            });
+        }
+        if (canDelete) {
+            if (!menu.isEmpty()) menu.divider();
+            menu.addDestructive(R.drawable.ic_delete, "Delete page",
+                    () -> act.documents.deleteDocumentPageAt(canvasCtxPageIndex));
+        }
+        int[] canvasLoc = new int[2];
+        act.canvas.getLocationOnScreen(canvasLoc);
+        menu.showAt(act.canvas, canvasLoc[0] + screenX, canvasLoc[1] + screenY);
     }
 
     Bitmap loadClipboardBitmap(boolean allowAnyUri) {

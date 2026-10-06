@@ -652,11 +652,9 @@ public final class BridgeClient implements Workspace {
 
     /** Blocking: stores {@code data} at {@code path} with the given timestamp, replacing what is there. */
     public void syncPushSync(String path, byte[] data, long mtimeMs) throws Exception {
-        JSONObject body = new JSONObject();
-        body.put("path", path);
-        body.put("mtimeMs", mtimeMs);
-        body.put("base64", android.util.Base64.encodeToString(data, android.util.Base64.NO_WRAP));
         // Gzipped: ink is JSON and shrinks to a fraction on the way (the host inflates it).
+        // The body is streamed: building it as base64 string, JSON string and bytes made
+        // three more copies of a document's ink (each over 10MB) and ran the heap out.
         HttpURLConnection c = open(baseUrl + "/file/write-binary");
         c.setConnectTimeout(8000);
         c.setReadTimeout(150000);
@@ -665,7 +663,14 @@ public final class BridgeClient implements Workspace {
         c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
         c.setRequestProperty("Content-Encoding", "gzip");
         try (java.util.zip.GZIPOutputStream gz = new java.util.zip.GZIPOutputStream(c.getOutputStream())) {
-            gz.write(body.toString().getBytes(StandardCharsets.UTF_8));
+            String head = "{\"path\":" + JSONObject.quote(path)
+                    + ",\"mtimeMs\":" + mtimeMs + ",\"base64\":\"";
+            gz.write(head.getBytes(StandardCharsets.UTF_8));
+            try (android.util.Base64OutputStream b64 = new android.util.Base64OutputStream(gz,
+                    android.util.Base64.NO_WRAP | android.util.Base64.NO_CLOSE)) {
+                b64.write(data);
+            }
+            gz.write("\"}".getBytes(StandardCharsets.UTF_8));
         }
         readResponse(c);
     }
@@ -866,6 +871,8 @@ public final class BridgeClient implements Workspace {
                 // Learning Mode is global: every message says whether it is on.
                 body.put("learningMode", learningMode);
                 body.put("allowPageView", allowPageView);
+                StudyLog log = studyLog;
+                if (log != null) body.put("studyWeek", log.weekReport(project));
                 streamNdjson("/chat/stream", body, listener);
             } catch (Exception e) {
                 String msg = e.getMessage() != null ? e.getMessage() : String.valueOf(e);
@@ -876,6 +883,12 @@ public final class BridgeClient implements Workspace {
 
     /** Learning Mode (Settings): sent with every chat message. */
     private volatile boolean learningMode;
+    /** This week's study time goes with every chat message, for the tutor's study plan. */
+    private volatile StudyLog studyLog;
+
+    public void setStudyLog(StudyLog log) {
+        studyLog = log;
+    }
     /** Settings → AI: whether the agent may look at the user's pages; sent with every message. */
     private volatile boolean allowPageView = true;
 
@@ -920,6 +933,60 @@ public final class BridgeClient implements Workspace {
             try {
                 JSONObject o = getJson("/learning/progress?project="
                         + java.net.URLEncoder.encode(project != null ? project : "", "UTF-8"));
+                main.post(() -> cb.onSuccess(o));
+            } catch (Exception e) {
+                main.post(() -> cb.onError(e.getMessage()));
+            }
+        });
+    }
+
+    /**
+     * What to study next in a project ({@code GET /learning/plan}), given this week's
+     * study time there so the plan can be sized to the weekly goal.
+     */
+    public void learningPlan(String project, long studiedMinutes, int daysLeft, Callback<JSONObject> cb) {
+        io.execute(() -> {
+            try {
+                JSONObject o = getJson("/learning/plan?project="
+                        + java.net.URLEncoder.encode(project != null ? project : "", "UTF-8")
+                        + "&studiedMin=" + studiedMinutes + "&daysLeft=" + daysLeft);
+                main.post(() -> cb.onSuccess(o));
+            } catch (Exception e) {
+                main.post(() -> cb.onError(e.getMessage()));
+            }
+        });
+    }
+
+    /**
+     * The one thing to study next across every project ({@code POST /learning/next}),
+     * from this week's study time per document.
+     */
+    public void learningNext(java.util.Map<String, Long> docMinutes, int daysLeft, Callback<JSONObject> cb) {
+        io.execute(() -> {
+            try {
+                JSONObject minutes = new JSONObject();
+                for (java.util.Map.Entry<String, Long> e : docMinutes.entrySet()) {
+                    minutes.put(e.getKey(), e.getValue());
+                }
+                JSONObject body = new JSONObject();
+                body.put("docMinutes", minutes);
+                body.put("daysLeft", daysLeft);
+                JSONObject o = postJson("/learning/next", body);
+                main.post(() -> cb.onSuccess(o));
+            } catch (Exception e) {
+                main.post(() -> cb.onError(e.getMessage()));
+            }
+        });
+    }
+
+    /** Minutes a week to study this project; 0 clears the goal. */
+    public void setWeeklyGoal(String project, int minutes, Callback<JSONObject> cb) {
+        io.execute(() -> {
+            try {
+                JSONObject body = new JSONObject();
+                body.put("project", project != null ? project : "");
+                body.put("minutes", minutes);
+                JSONObject o = postJson("/learning/weekly-goal", body);
                 main.post(() -> cb.onSuccess(o));
             } catch (Exception e) {
                 main.post(() -> cb.onError(e.getMessage()));

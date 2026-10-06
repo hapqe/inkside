@@ -1,0 +1,30 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFFFF">
+  <!-- A highlighter: cap, body, collar and chisel tip, tilted, over the swipe it leaves. -->
+  <path
+      android:fillColor="#FFFFFFFF"
+      android:fillAlpha="0.45"
+      android:pathData="M2.5,19.5h9a1.25,1.25 0,0 1,0 2.5h-9a1.25,1.25 0,0 1,0 -2.5z"/>
+  <group
+      android:rotation="40"
+      android:pivotX="12"
+      android:pivotY="11">
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.8"
+        android:strokeLineJoin="round"
+        android:pathData="M9.5,1.5h5a1,1 0,0 1,1 1v4h-7v-4a1,1 0,0 1,1 -1z"/>
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.8"
+        android:strokeLineJoin="round"
+        android:pathData="M8.5,6.5h7v7.5l-1.5,2h-4l-1.5,-2z"/>
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M10,16h4v2.2l-4,1.8z"/>
+  </group>
+</vector>

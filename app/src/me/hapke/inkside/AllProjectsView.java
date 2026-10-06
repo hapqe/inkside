@@ -32,6 +32,9 @@ final class AllProjectsView extends FrameLayout {
         void onOpenSharedPdf(String path);
 
         default void onLibraryMessage(String msg) {}
+
+        /** The ⋮ in the title row: the app's menu (settings, learning, …). */
+        default void onShowMenu(View anchor) {}
     }
 
     /**
@@ -45,6 +48,7 @@ final class AllProjectsView extends FrameLayout {
     private final Listener listener;
     private final LinearLayout rootCol;
     private final ImageView upButton;
+    private final ImageView menuButton;
     private final TextView titleView;
     private final EditText searchInput;
     private final TextView filterAll;
@@ -103,6 +107,14 @@ final class AllProjectsView extends FrameLayout {
         titleView.setPadding(dp(4), 0, 0, 0);
         top.addView(titleView, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        menuButton = new ImageView(ctx);
+        menuButton.setImageResource(R.drawable.ic_more);
+        menuButton.setPadding(dp(8), dp(8), dp(8), dp(8));
+        menuButton.setContentDescription("More");
+        menuButton.setOnClickListener(v -> {
+            if (listener != null) listener.onShowMenu(v);
+        });
+        top.addView(menuButton, new LinearLayout.LayoutParams(dp(40), dp(40)));
         rootCol.addView(top, matchWrap());
 
         // —— Search ——
@@ -211,6 +223,7 @@ final class AllProjectsView extends FrameLayout {
         searchInput.setTextColor(colorOnSurface);
         searchInput.setHintTextColor(colorOnVariant);
         tint(upButton, colorOnSurface);
+        tint(menuButton, colorOnSurface);
         styleFilters();
         if (!entries.isEmpty()) rebuildGrid();
         // Rebuild the New button in the new colours.
@@ -338,6 +351,8 @@ final class AllProjectsView extends FrameLayout {
     /** What is being dragged: the entry, and whether the finger has really moved. */
     private static final class LibDrag {
         final BridgeClient.LibraryEntry entry;
+        /** The card that was pressed: the menu opens at it. */
+        View card;
         float startX = Float.NaN, startY = Float.NaN;
         boolean moved;
 
@@ -349,7 +364,9 @@ final class AllProjectsView extends FrameLayout {
     private void startCardDrag(View card, BridgeClient.LibraryEntry e) {
         card.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
         android.content.ClipData data = android.content.ClipData.newPlainText("library", e.path);
-        card.startDragAndDrop(data, new View.DragShadowBuilder(card), new LibDrag(e), 0);
+        LibDrag drag = new LibDrag(e);
+        drag.card = card;
+        card.startDragAndDrop(data, new View.DragShadowBuilder(card), drag, 0);
     }
 
     /**
@@ -375,7 +392,7 @@ final class AllProjectsView extends FrameLayout {
                 // ends unhandled and opens the menu below.
                 return false;
             case android.view.DragEvent.ACTION_DRAG_ENDED:
-                if (!ev.getResult() && !d.moved) post(() -> showItemMenu(d.entry));
+                if (!ev.getResult() && !d.moved) post(() -> showItemMenu(d.entry, d.card));
                 return true;
             default:
                 return true;
@@ -768,29 +785,24 @@ final class AllProjectsView extends FrameLayout {
                 .show();
     }
 
-    private void showItemMenu(BridgeClient.LibraryEntry e) {
+    private void showItemMenu(BridgeClient.LibraryEntry e, View card) {
         FavoritesStore fav = FavoritesStore.get(getContext());
         String id = FavoritesStore.fileId(e.path);
         boolean on = fav.isFavorite(id);
-        boolean colourable = !"pdf".equals(e.kind);
-        CharSequence[] items = colourable
-                ? new CharSequence[]{on ? "Remove from favorites" : "Add to favorites",
-                        "Move to…", "Change colour…"}
-                : new CharSequence[]{on ? "Remove from favorites" : "Add to favorites",
-                        "Move to…"};
-        new M3Dialog.Builder(getContext())
-                .setTitle(stripPdf(e.name))
-                .setItems(items, (d, which) -> {
-                    if (which == 0) {
-                        fav.toggle(id);
-                        rebuildGrid();
-                    } else if (which == 1) {
-                        promptMove(e);
-                    } else {
-                        promptTileColor(e);
-                    }
-                })
-                .show();
+        M3Menu menu = new M3Menu(getContext());
+        menu.add(R.drawable.ic_star, on ? "Remove from favorites" : "Add to favorites", () -> {
+            fav.toggle(id);
+            rebuildGrid();
+        });
+        menu.add(R.drawable.ic_folder_open, "Move to\u2026", () -> promptMove(e));
+        if (!"pdf".equals(e.kind)) menu.add(R.drawable.ic_palette, "Change colour\u2026", () -> promptTileColor(e));
+        if (card != null && card.isAttachedToWindow()) {
+            int[] loc = new int[2];
+            card.getLocationOnScreen(loc);
+            menu.showAt(card, loc[0] + card.getWidth() * 0.5f, loc[1] + card.getHeight() * 0.5f);
+        } else {
+            menu.showAt(this, getWidth() * 0.5f, getHeight() * 0.4f);
+        }
     }
 
     private void promptNewFolder() {

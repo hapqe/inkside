@@ -1032,7 +1032,7 @@ final class FolderExplorerView extends FrameLayout {
         // onto a folder (moves it) or onto the canvas (places it).
         final float[] down = new float[2];
         final boolean[] armed = new boolean[1];
-        final android.widget.PopupMenu[] menu = new android.widget.PopupMenu[1];
+        final M3Menu[] menu = new M3Menu[1];
         row.setOnLongClickListener(v -> {
             armed[0] = true;
             menu[0] = showItemMenu(v, node.path, node.name, node.isDir());
@@ -1078,82 +1078,57 @@ final class FolderExplorerView extends FrameLayout {
     private void showToolFavoriteMenu(View anchor, String favId) {
         anchor.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
         FavoritesStore fav = FavoritesStore.get(getContext());
-        android.widget.PopupMenu popup = new android.widget.PopupMenu(getContext(), anchor);
         boolean on = fav.isFavorite(favId);
-        popup.getMenu().add(0, 1, 0, on ? "Remove from favorites" : "Add to favorites");
-        popup.setOnMenuItemClickListener(item -> {
-            if (item.getItemId() == 1) {
-                fav.toggle(favId);
-                return true;
-            }
-            return false;
-        });
-        popup.show();
+        new M3Menu(getContext())
+                .add(R.drawable.ic_star, on ? "Remove from favorites" : "Add to favorites", () -> fav.toggle(favId))
+                .showUnder(anchor);
     }
 
-    private android.widget.PopupMenu showItemMenu(View anchor, String path, String label, boolean isDir) {
+    private M3Menu showItemMenu(View anchor, String path, String label, boolean isDir) {
         anchor.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
         FavoritesStore fav = FavoritesStore.get(getContext());
         String id = FavoritesStore.fileId(path);
-        android.widget.PopupMenu popup = new android.widget.PopupMenu(getContext(), anchor);
-        android.view.Menu m = popup.getMenu();
         boolean on = fav.isFavorite(id);
         final String pasteDir = isDir ? path : parentOf(path);
-        if (isDir) m.add(0, 10, 0, "New folder here");
-        if (isDir) m.add(0, 16, 0, "Upload file here…");
-        else m.add(0, 17, 5, "Download to tablet");
-        if (clipPath != null) {
-            m.add(0, 11, 1, (clipCut ? "Move “" : "Paste “") + leafOf(clipPath) + "” here");
+        M3Menu m = new M3Menu(getContext());
+        if (isDir) {
+            m.add(R.drawable.ic_folder_add, "New folder here", () -> promptNewFolder(path));
+            m.add(R.drawable.ic_upload, "Upload file here\u2026", () -> {
+                if (listener != null) listener.onUploadInto(path);
+            });
         }
-        m.add(0, 12, 2, "Rename");
-        m.add(0, 13, 3, "Cut");
-        m.add(0, 14, 4, "Copy");
-        m.add(0, 15, 5, "Delete");
-        m.add(0, 1, 6, on ? "Remove from favorites" : "Add to favorites");
-        if (!isDir) m.add(0, 2, 7, "Drag to canvas");
-        popup.setOnMenuItemClickListener(item -> {
-            int mid = item.getItemId();
-            switch (mid) {
-                case 1:
-                    fav.toggle(id);
-                    rebuildTree();
-                    return true;
-                case 2:
-                    startRowDrag(anchor, path);
-                    return true;
-                case 10:
-                    promptNewFolder(path);
-                    return true;
-                case 16:
-                    if (listener != null) listener.onUploadInto(path);
-                    return true;
-                case 17:
-                    if (listener != null) listener.onDownloadFile(path);
-                    return true;
-                case 11:
-                    pasteInto(pasteDir);
-                    return true;
-                case 12:
-                    promptRename(path);
-                    return true;
-                case 13:
-                case 14:
-                    clipPath = path;
-                    clipCut = mid == 13;
-                    if (listener != null) {
-                        listener.onExplorerMessage((clipCut ? "Cut " : "Copied ") + "“" + leafOf(path)
-                                + "” — long-press a folder to paste");
-                    }
-                    return true;
-                case 15:
-                    confirmDelete(path, isDir);
-                    return true;
-                default:
-                    return false;
-            }
+        if (clipPath != null) {
+            m.add(R.drawable.ic_paste, (clipCut ? "Move \u201c" : "Paste \u201c") + leafOf(clipPath) + "\u201d here",
+                    () -> pasteInto(pasteDir));
+        }
+        m.divider();
+        m.add(R.drawable.ic_edit, "Rename", () -> promptRename(path));
+        m.add(R.drawable.ic_cut, "Cut", () -> clipFor(path, true));
+        m.add(R.drawable.ic_copy, "Copy", () -> clipFor(path, false));
+        if (!isDir) {
+            m.add(R.drawable.ic_download, "Download to tablet", () -> {
+                if (listener != null) listener.onDownloadFile(path);
+            });
+            m.add(R.drawable.ic_open_in_new, "Drag to canvas", () -> startRowDrag(anchor, path));
+        }
+        m.add(R.drawable.ic_star, on ? "Remove from favorites" : "Add to favorites", () -> {
+            fav.toggle(id);
+            rebuildTree();
         });
-        popup.show();
-        return popup;
+        m.divider();
+        m.addDestructive(R.drawable.ic_delete, "Delete", () -> confirmDelete(path, isDir));
+        m.showUnder(anchor);
+        return m;
+    }
+
+    /** Cut or Copy: remember the item; a long-press on a folder pastes it there. */
+    private void clipFor(String path, boolean cut) {
+        clipPath = path;
+        clipCut = cut;
+        if (listener != null) {
+            listener.onExplorerMessage((cut ? "Cut " : "Copied ") + "\u201c" + leafOf(path)
+                    + "\u201d \u2014 long-press a folder to paste");
+        }
     }
 
     private void openFile(String path) {

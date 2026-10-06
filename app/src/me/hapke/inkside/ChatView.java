@@ -693,7 +693,13 @@ final class ChatView {
 
     private void updateChatCanvasFabVisibility() {
         if (act.chatCanvasFab != null) {
-            act.chatCanvasFab.setVisibility(act.chatCollapsed && act.aiEnabled ? View.VISIBLE : View.GONE);
+            boolean show = act.chatCollapsed && act.aiEnabled;
+            act.chatCanvasFab.setVisibility(show ? View.VISIBLE : View.GONE);
+            // A swipe faded it out while the chat followed the fingers: fade it back.
+            if (show && act.chatCanvasFab.getAlpha() < 1f) {
+                act.chatCanvasFab.animate().cancel();
+                act.chatCanvasFab.animate().alpha(1f).setDuration(Motion.ENTER_MS).start();
+            }
         }
     }
 
@@ -1287,6 +1293,34 @@ final class ChatView {
         }
         positionChatResizeHandle();
         act.updateToolPillPosition();
+    }
+
+    private float gestureSlideStartTx;
+
+    /** A two-finger swipe takes hold of the chat: it follows the fingers from here. */
+    boolean beginGestureSlide() {
+        if (act.chatPanel == null || act.chatResizing) return false;
+        if (!act.aiEnabled || !act.computers.hasHost()) return false;
+        if (act.chatSlideAnim != null) act.chatSlideAnim.cancel();
+        if (chatTabsOpen) hideChatTabsOverlay();
+        gestureSlideStartTx = act.chatPanel.getTranslationX();
+        // The chat is coming out by hand: its button gets out of the way at once.
+        if (act.chatCanvasFab != null && act.chatCanvasFab.getVisibility() == View.VISIBLE) {
+            act.chatCanvasFab.animate().cancel();
+            act.chatCanvasFab.animate().alpha(0f).setDuration(120).start();
+        }
+        return true;
+    }
+
+    /** The fingers are {@code dx} px from where the swipe took hold. */
+    void dragGestureSlide(float dx) {
+        setChatTranslation(gestureSlideStartTx + dx);
+    }
+
+    /** Let go: open or close, by how far it came out and how fast the fingers moved. */
+    void endGestureSlide(float velocityX) {
+        snapChatFromGesture(velocityX);
+        syncChatResizeHandleVisibility();
     }
 
     private void snapChatFromGesture(float velocityX) {

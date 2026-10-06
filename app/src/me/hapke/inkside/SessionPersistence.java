@@ -72,6 +72,13 @@ final class SessionPersistence {
      */
     void saveSessionNow(boolean waitForDisk) {
         if (act.restoring || act.stateStore == null || act.canvas == null) return;
+        if (!waitForDisk && act.canvas.isInkInProgress()) {
+            // Building the state runs on the UI thread: landing mid-stroke, it stalled
+            // the pen halfway through the line. Go again once the pen is up.
+            act.saveHandler.removeCallbacks(act.saveRunnable);
+            act.saveHandler.postDelayed(act.saveRunnable, 250);
+            return;
+        }
         act.sessionDirty = false;
         pendingSaveIsCamera = false;
         act.saveHandler.removeCallbacks(act.saveRunnable);
@@ -96,6 +103,10 @@ final class SessionPersistence {
             state.put("chats", chatsJson);
             state.put("selectedColorIndex", act.selectedColorIndex);
             if (act.canvas != null) state.put("palmRejection", act.canvas.isPalmRejection());
+            if (act.canvas != null) state.put("threeFingerUndo", act.canvas.isThreeFingerUndo());
+            if (act.canvas != null) state.put("threeFingerFavorites", act.canvas.isThreeFingerFavorites());
+            if (act.canvas != null) state.put("threeFingerDocs", act.canvas.isThreeFingerDocs());
+            state.put("twoFingerChat", act.twoFingerChatSwipe);
             if (act.canvas != null) state.put("quickFavorites", act.canvas.isQuickFavoritesEnabled());
             if (act.canvas != null) state.put("shapeSnap", act.canvas.isShapeSnapEnabled());
             if (act.canvas != null) state.put("penOutline", act.canvas.isPenOutline());
@@ -116,6 +127,14 @@ final class SessionPersistence {
             for (int c : act.favoriteColors) favJson.put(c);
             state.put("favoriteColors", favJson);
             state.put("brush", CodeCanvasView.BRUSH_KEYS[act.brush]);
+            state.put("penBrush", CodeCanvasView.BRUSH_KEYS[act.penBrush]);
+            state.put("writingBrush", CodeCanvasView.BRUSH_KEYS[act.writingBrush]);
+            JSONObject shapeTool = new JSONObject();
+            shapeTool.put("kind", act.shapeKind);
+            shapeTool.put("fill", act.shapeFill);
+            shapeTool.put("border", act.shapeBorder);
+            shapeTool.put("width", act.shapeBorderWidth);
+            state.put("shapeTool", shapeTool);
             JSONObject textDefaults = new JSONObject();
             textDefaults.put("size", (double) CanvasTextField.newSize);
             textDefaults.put("family", CanvasTextField.newFamily);
@@ -419,6 +438,23 @@ final class SessionPersistence {
             if (act.brush == CodeCanvasView.BRUSH_INK && state.optBoolean("glowBrush", false)) {
                 act.brush = CodeCanvasView.BRUSH_GLOW;
             }
+            act.penBrush = CodeCanvasView.brushFromKey(state.optString("penBrush",
+                    act.brush == CodeCanvasView.BRUSH_HIGHLIGHTER ? "ink" : CodeCanvasView.BRUSH_KEYS[act.brush]));
+            if (!CodeCanvasView.isPenBrush(act.penBrush)) act.penBrush = CodeCanvasView.BRUSH_INK;
+            // Calligraphy is no longer offered: whoever had it gets plain ink.
+            if (act.brush == CodeCanvasView.BRUSH_CALLIGRAPHY) act.brush = CodeCanvasView.BRUSH_INK;
+            act.writingBrush = CodeCanvasView.brushFromKey(state.optString("writingBrush",
+                    CodeCanvasView.BRUSH_KEYS[act.brush == CodeCanvasView.BRUSH_HIGHLIGHTER
+                            ? CodeCanvasView.BRUSH_HIGHLIGHTER : act.penBrush]));
+            if (act.writingBrush != CodeCanvasView.BRUSH_HIGHLIGHTER) act.writingBrush = act.penBrush;
+            JSONObject shapeTool = state.optJSONObject("shapeTool");
+            if (shapeTool != null) {
+                act.shapeKind = ShapeLibrary.clamp(shapeTool.optInt("kind", act.shapeKind));
+                act.shapeFill = shapeTool.optInt("fill", act.shapeFill);
+                act.shapeBorder = shapeTool.optInt("border", act.shapeBorder);
+                act.shapeBorderWidth = (float) shapeTool.optDouble("width", act.shapeBorderWidth);
+            }
+            act.penTools.applyShapeStyle();
             JSONArray pensJson = state.optJSONArray("pens");
             if (pensJson != null) {
                 act.penTools.pensFromJson(pensJson);
@@ -444,6 +480,10 @@ final class SessionPersistence {
             if (act.canvas != null) act.canvas.setBrush(act.brush);
             if (act.canvas != null) {
                 act.canvas.setPalmRejection(state.optBoolean("palmRejection", true));
+                act.canvas.setThreeFingerUndo(state.optBoolean("threeFingerUndo", true));
+                act.canvas.setThreeFingerFavorites(state.optBoolean("threeFingerFavorites", true));
+                act.canvas.setThreeFingerDocs(state.optBoolean("threeFingerDocs", true));
+                act.twoFingerChatSwipe = state.optBoolean("twoFingerChat", true);
                 act.canvas.setQuickFavoritesEnabled(state.optBoolean("quickFavorites", true));
                 act.canvas.setShapeSnapEnabled(state.optBoolean("shapeSnap", true));
                 act.canvas.setPenOutline(state.optBoolean("penOutline", state.optBoolean("penShadow", false)));

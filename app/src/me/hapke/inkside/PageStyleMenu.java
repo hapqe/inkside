@@ -235,6 +235,7 @@ final class PageStyleMenu {
         cardLp.leftMargin = act.dp(MainActivity.SPACE_XL);
         cardLp.rightMargin = act.dp(MainActivity.SPACE_XL);
         overlay.addView(scroller, cardLp);
+        act.liftPanel(overlay);
         act.rootLayout.addView(overlay, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }

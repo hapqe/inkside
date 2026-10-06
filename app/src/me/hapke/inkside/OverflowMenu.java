@@ -92,61 +92,66 @@ final class OverflowMenu {
 
     /** Small dropdown under the three-dot button. */
     void showOverflowMenu() {
+        showOverflowMenu(act.settingsButton, false);
+    }
+
+    /**
+     * The ⋮ menu under {@code anchor}. From the All Projects library ({@code library})
+     * it leaves out what needs an open document, and the way to the library itself.
+     */
+    void showOverflowMenu(View anchor, boolean library) {
         if (overflowOverlay != null) {
             dismissOverflowMenu();
             return;
         }
-        if (act.rootLayout == null || act.settingsButton == null) return;
-
-        FrameLayout overlay = new FrameLayout(act);
-        overlay.setClickable(true);
-        overlay.setOnClickListener(v -> dismissOverflowMenu());
+        if (act.rootLayout == null || anchor == null) return;
 
         LinearLayout menu = buildDropdownMenu();
         menu.setPadding(act.dp(MainActivity.SPACE_MD), act.dp(MainActivity.SPACE_MD), act.dp(MainActivity.SPACE_MD), act.dp(MainActivity.SPACE_MD));
-        addOverflowRow(menu, overflowItem(R.drawable.ic_folder_open, "All Projects", () -> {
-            dismissOverflowMenu();
-            act.projects.showAllProjects();
-        }));
-        addOverflowRow(menu, overflowItem(R.drawable.ic_palette, "Page styling", () -> {
-            dismissOverflowMenu();
-            act.pageStyle.showPageStyleMenu();
-        }));
+        if (!library) {
+            addOverflowRow(menu, overflowItem(R.drawable.ic_folder_open, "All Projects", () -> {
+                dismissOverflowMenu();
+                act.projects.showAllProjects();
+            }));
+            addOverflowRow(menu, overflowItem(R.drawable.ic_palette, "Page styling", () -> {
+                dismissOverflowMenu();
+                act.pageStyle.showPageStyleMenu();
+            }));
+        }
         addOverflowRow(menu, overflowItem(R.drawable.ic_star, "Quick favorites", () -> {
             dismissOverflowMenu();
             act.favorites.showFavoritesArranger();
         }));
-        addOverflowRow(menu, overflowItem(R.drawable.ic_fullscreen, "Zen mode", () -> {
-            dismissOverflowMenu();
-            act.zen.enterZenMode();
-        }));
-        addOverflowRow(menu, overflowItem(R.drawable.ic_present,
-                act.presentation != null ? "Stop presenting" : "Present", () -> {
-            dismissOverflowMenu();
-            act.slideshow.togglePresentation();
-        }));
-        addOverflowRow(menu, overflowItem(R.drawable.ic_calendar, "Study week", () -> {
-            dismissOverflowMenu();
-            new StudyWeekDialog(act).show();
-        }));
-        if (act.aiEnabled && act.computers.hasHost()) {
-            addOverflowRow(menu, overflowItem(R.drawable.ic_bolt, "Learning progress", () -> {
+        if (!library) {
+            addOverflowRow(menu, overflowItem(R.drawable.ic_fullscreen, "Zen mode", () -> {
                 dismissOverflowMenu();
-                new LearningDialog(act).show();
+                act.zen.enterZenMode();
+            }));
+            addOverflowRow(menu, overflowItem(R.drawable.ic_present,
+                    act.presentation != null ? "Stop presenting" : "Present", () -> {
+                dismissOverflowMenu();
+                act.slideshow.togglePresentation();
             }));
         }
-        if (act.canvas != null && act.canvas.hasDocument()) {
+        if (!library && act.aiEnabled && act.computers.hasHost()
+                && act.canvas != null && act.canvas.hasDocument()) {
+            addOverflowRow(menu, overflowItem(R.drawable.ic_check_circle, "Check my work", () -> {
+                dismissOverflowMenu();
+                act.conversations.checkMyWork();
+            }));
+        }
+        addOverflowRow(menu, overflowItem(R.drawable.ic_lightbulb, "Learning", () -> {
+            removeOverlayNow();
+            showLearningMenu(anchor, library);
+        }));
+        if (!library && act.canvas != null && act.canvas.hasDocument()) {
             addOverflowRow(menu, overflowItem(R.drawable.ic_download, "Export PDF", () -> {
                 dismissOverflowMenu();
                 act.pdfExport.exportCurrentPdf();
             }));
         }
         // App-level settings are a different kind of thing from the actions above.
-        View divider = m3MenuDivider();
-        LinearLayout.LayoutParams dlp = (LinearLayout.LayoutParams) divider.getLayoutParams();
-        dlp.topMargin = act.dp(MainActivity.SPACE_SM);
-        dlp.bottomMargin = act.dp(MainActivity.SPACE_SM);
-        menu.addView(divider, dlp);
+        addMenuDivider(menu);
         final PairedHosts.Host linked = PairedHosts.remote(act);
         addOverflowRow(menu, overflowItem(R.drawable.ic_link,
                 linked == null ? "Connect a computer" : "Remote: " + linked.name, () -> {
@@ -165,19 +170,81 @@ final class OverflowMenu {
             dismissOverflowMenu();
             AboutDialog.show(act);
         }));
+        showDropdownUnder(anchor, menu);
+    }
 
+    /**
+     * ⋮ → Learning: what to study next (across every project), progress, the weekly
+     * goal and the study week, kept together so the main menu stays short.
+     */
+    private void showLearningMenu(View anchor, boolean library) {
+        if (act.rootLayout == null || anchor == null) return;
+        LinearLayout menu = buildDropdownMenu();
+        menu.setPadding(act.dp(MainActivity.SPACE_MD), act.dp(MainActivity.SPACE_MD), act.dp(MainActivity.SPACE_MD), act.dp(MainActivity.SPACE_MD));
+        addOverflowRow(menu, overflowItem(R.drawable.ic_chevron_left, "Learning", () -> {
+            removeOverlayNow();
+            showOverflowMenu(anchor, library);
+        }));
+        addMenuDivider(menu);
+        boolean host = act.aiEnabled && act.computers.hasHost();
+        if (host) {
+            addOverflowRow(menu, overflowItem(R.drawable.ic_bolt, "What to do next", () -> {
+                dismissOverflowMenu();
+                act.studyNext.showWhatNext();
+            }));
+            addOverflowRow(menu, overflowItem(R.drawable.ic_check_circle, "Learning progress", () -> {
+                dismissOverflowMenu();
+                new LearningDialog(act).show();
+            }));
+            // A goal belongs to a project; the library has none open.
+            if (!library) {
+                addOverflowRow(menu, overflowItem(R.drawable.ic_timer, "Weekly goal", () -> {
+                    dismissOverflowMenu();
+                    act.studyNext.pickWeeklyGoal();
+                }));
+            }
+        }
+        addOverflowRow(menu, overflowItem(R.drawable.ic_calendar, "Study week", () -> {
+            dismissOverflowMenu();
+            new StudyWeekDialog(act).show();
+        }));
+        showDropdownUnder(anchor, menu);
+    }
+
+    /** Takes the open dropdown away at once, for another to replace it. */
+    private void removeOverlayNow() {
+        FrameLayout overlay = overflowOverlay;
+        overflowOverlay = null;
+        if (overlay != null && act.rootLayout != null) act.rootLayout.removeView(overlay);
+    }
+
+    private void addMenuDivider(LinearLayout menu) {
+        View divider = m3MenuDivider();
+        LinearLayout.LayoutParams dlp = (LinearLayout.LayoutParams) divider.getLayoutParams();
+        dlp.topMargin = act.dp(MainActivity.SPACE_SM);
+        dlp.bottomMargin = act.dp(MainActivity.SPACE_SM);
+        menu.addView(divider, dlp);
+    }
+
+    /** Opens {@code menu} under {@code anchor}, right-aligned to it, over everything else. */
+    private void showDropdownUnder(View anchor, LinearLayout menu) {
+        FrameLayout overlay = new FrameLayout(act);
+        overlay.setClickable(true);
+        overlay.setOnClickListener(v -> dismissOverflowMenu());
         int[] loc = new int[2];
-        act.settingsButton.getLocationInWindow(loc);
+        anchor.getLocationInWindow(loc);
         int[] rootLoc = new int[2];
         act.rootLayout.getLocationInWindow(rootLoc);
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                 act.dp(OVERFLOW_MENU_W), ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.gravity = Gravity.TOP | Gravity.START;
-        lp.topMargin = loc[1] - rootLoc[1] + act.settingsButton.getHeight() + act.dp(MainActivity.SPACE_SM);
+        lp.topMargin = loc[1] - rootLoc[1] + anchor.getHeight() + act.dp(MainActivity.SPACE_SM);
         // Right-align to the button so the menu never runs off the edge.
         lp.leftMargin = Math.max(act.dp(MainActivity.SPACE_SM),
-                loc[0] - rootLoc[0] + act.settingsButton.getWidth() - act.dp(OVERFLOW_MENU_W));
+                loc[0] - rootLoc[0] + anchor.getWidth() - act.dp(OVERFLOW_MENU_W));
         overlay.addView(menu, lp);
+        // Above the floating chat, which otherwise sat over the menu's rows.
+        act.liftPanel(overlay);
         act.rootLayout.addView(overlay, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         overflowOverlay = overlay;
@@ -185,6 +252,161 @@ final class OverflowMenu {
     }
 
     private static final int OVERFLOW_MENU_W = 244;
+
+    /** The selection bar's ⋮: layer, flip and presentation visibility of the selection. */
+    void showSelectionMenu(View anchor) {
+        if (overflowOverlay != null) {
+            dismissOverflowMenu();
+            return;
+        }
+        final CodeCanvasView canvas = act.canvas;
+        if (act.rootLayout == null || anchor == null || canvas == null) return;
+        FrameLayout overlay = new FrameLayout(act);
+        overlay.setClickable(true);
+        overlay.setOnClickListener(v -> dismissOverflowMenu());
+
+        LinearLayout menu = buildDropdownMenu();
+        menu.setPadding(act.dp(MainActivity.SPACE_MD), act.dp(MainActivity.SPACE_MD), act.dp(MainActivity.SPACE_MD), act.dp(MainActivity.SPACE_MD));
+        addOverflowRow(menu, overflowItem(R.drawable.ic_layer_front, "Move to first layer", () -> {
+            dismissOverflowMenu();
+            if (canvas.moveSelectionToLayer(true)) act.persistence.scheduleSave();
+        }));
+        addOverflowRow(menu, overflowItem(R.drawable.ic_layer_back, "Move to last layer", () -> {
+            dismissOverflowMenu();
+            if (canvas.moveSelectionToLayer(false)) act.persistence.scheduleSave();
+        }));
+        if (canvas.selectionHasThickness()) {
+            addOverflowRow(menu, overflowItem(R.drawable.ic_tune, "Thickness", () -> {
+                dismissOverflowMenu();
+                showThicknessDialog(canvas);
+            }));
+        }
+        if (act.aiEnabled && act.computers.hasHost()) {
+            addOverflowRow(menu, overflowItem(R.drawable.ic_check_circle, "Check this", () -> {
+                dismissOverflowMenu();
+                act.conversations.checkMyWork();
+            }));
+        }
+        addOverflowRow(menu, overflowItem(R.drawable.ic_sticker, "Save as sticker", () -> {
+            dismissOverflowMenu();
+            act.stickers.saveSelection();
+        }));
+        if (canvas.selectionHasInkOrImages()) {
+            addOverflowRow(menu, overflowItem(R.drawable.ic_flip_horizontal, "Flip horizontal", () -> {
+                dismissOverflowMenu();
+                if (canvas.flipSelection(true)) act.persistence.scheduleSave();
+            }));
+            addOverflowRow(menu, overflowItem(R.drawable.ic_flip_vertical, "Flip vertical", () -> {
+                dismissOverflowMenu();
+                if (canvas.flipSelection(false)) act.persistence.scheduleSave();
+            }));
+        }
+        View divider = m3MenuDivider();
+        LinearLayout.LayoutParams dlp = (LinearLayout.LayoutParams) divider.getLayoutParams();
+        dlp.topMargin = act.dp(MainActivity.SPACE_SM);
+        dlp.bottomMargin = act.dp(MainActivity.SPACE_SM);
+        menu.addView(divider, dlp);
+        // Hidden in presentation: shown on the tablet, left off the slide.
+        final boolean hidden = canvas.selectionPresentHidden();
+        addOverflowRow(menu, overflowItem(
+                hidden ? R.drawable.ic_visibility : R.drawable.ic_visibility_off,
+                hidden ? "Show in presentation" : "Hide in presentation", () -> {
+            dismissOverflowMenu();
+            if (!canvas.hasActiveSelection()) return;
+            boolean nowHidden = canvas.togglePresentHidden();
+            act.persistence.scheduleSave();
+            act.snackbar(nowHidden ? "Hidden in the presentation"
+                    : "Shown in the presentation", false);
+        }));
+
+        int[] loc = new int[2];
+        anchor.getLocationInWindow(loc);
+        int[] rootLoc = new int[2];
+        act.rootLayout.getLocationInWindow(rootLoc);
+        int menuW = act.dp(SELECTION_MENU_W);
+        menu.measure(View.MeasureSpec.makeMeasureSpec(menuW, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+        int gap = act.dp(MainActivity.SPACE_SM);
+        int anchorTop = loc[1] - rootLoc[1];
+        int below = anchorTop + anchor.getHeight() + gap;
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                menuW, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.gravity = Gravity.TOP | Gravity.START;
+        // Under the button, or above it when the selection sits low on the screen.
+        if (below + menu.getMeasuredHeight() > act.rootLayout.getHeight() - gap) {
+            lp.topMargin = Math.max(gap, anchorTop - gap - menu.getMeasuredHeight());
+        } else {
+            lp.topMargin = below;
+        }
+        lp.leftMargin = Math.max(gap, Math.min(
+                act.rootLayout.getWidth() - menuW - gap,
+                loc[0] - rootLoc[0] + anchor.getWidth() - menuW));
+        overlay.addView(menu, lp);
+        act.liftPanel(overlay);
+        act.rootLayout.addView(overlay, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        overflowOverlay = overlay;
+        animateDropdownIn(menu);
+    }
+
+    private static final int SELECTION_MENU_W = 244;
+
+    /** A slider for the selection's line width, previewed on the page as it moves. */
+    private void showThicknessDialog(CodeCanvasView canvas) {
+        final float start = canvas.selectionThickness();
+        // Slider in tenths of a world unit, 0.5 to 40.
+        final int min = 5, max = 400;
+        LinearLayout box = new LinearLayout(act);
+        box.setOrientation(LinearLayout.HORIZONTAL);
+        box.setGravity(Gravity.CENTER_VERTICAL);
+        Material3Slider slider = new Material3Slider(act);
+        slider.setMax(max - min);
+        slider.setProgress(Math.round(Math.max(min, Math.min(max, start * 10f))) - min);
+        act.tintSeekBar(slider);
+        final TextView value = new TextView(act);
+        value.setTextColor(act.M3_ON_SURFACE);
+        value.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        value.setGravity(Gravity.END);
+        value.setMinWidth(act.dp(40));
+        value.setText(formatThickness(start));
+        box.addView(slider, new LinearLayout.LayoutParams(0, act.dp(40), 1f));
+        box.addView(value);
+        final boolean[] started = new boolean[1];
+        slider.setOnSeekBarChangeListener(new android.widget.SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(android.widget.SeekBar seekBar, int progress, boolean fromUser) {
+                if (!fromUser) return;
+                float w = (progress + min) / 10f;
+                value.setText(formatThickness(w));
+                if (!started[0]) {
+                    canvas.beginThicknessEdit();
+                    started[0] = true;
+                }
+                canvas.setSelectionThickness(w);
+            }
+
+            @Override public void onStartTrackingTouch(android.widget.SeekBar seekBar) {}
+
+            @Override public void onStopTrackingTouch(android.widget.SeekBar seekBar) {}
+        });
+        new M3Dialog.Builder(act)
+                .setTitle("Thickness")
+                .setView(box)
+                .setPositiveButton("Done", null)
+                .setOnDismissListener(d -> {
+                    if (started[0]) {
+                        canvas.endThicknessEdit();
+                        act.persistence.scheduleSave();
+                    }
+                })
+                .show();
+    }
+
+    private static String formatThickness(float w) {
+        return w >= 10f ? String.valueOf(Math.round(w)) : String.format(java.util.Locale.ROOT, "%.1f", w);
+    }
+
+
 
     /** What the chat's + button offers; opens above the button. */
     void showAttachMenu(View anchor) {
@@ -231,6 +453,8 @@ final class OverflowMenu {
         lp.bottomMargin = act.rootLayout.getHeight() - (loc[1] - rootLoc[1]) + act.dp(MainActivity.SPACE_SM);
         lp.leftMargin = Math.max(act.dp(MainActivity.SPACE_SM), loc[0] - rootLoc[0]);
         overlay.addView(menu, lp);
+        // Above the floating chat, which otherwise sat over the menu's rows.
+        act.liftPanel(overlay);
         act.rootLayout.addView(overlay, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         overflowOverlay = overlay;
@@ -373,8 +597,8 @@ final class OverflowMenu {
         lp.topMargin = loc[1] - rootLoc[1] + act.quickSwitchButton.getHeight() + act.dp(MainActivity.SPACE_SM);
         lp.leftMargin = Math.max(act.dp(MainActivity.SPACE_SM), loc[0] - rootLoc[0] - act.dp(100));
         overlay.addView(menu, lp);
-        // Above the floating chat button, which otherwise sat over the list's rows.
-        overlay.setTranslationZ(act.dp(48));
+        // Above the floating chat, which otherwise sat over the menu's rows.
+        act.liftPanel(overlay);
         act.rootLayout.addView(overlay, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         overflowOverlay = overlay;

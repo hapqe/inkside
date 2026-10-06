@@ -12,7 +12,8 @@ import { query, AbortError, deleteSession } from "@anthropic-ai/claude-agent-sdk
 import { attachEventStream, broadcast, clientCount } from "./events.mjs";
 import { CanvasQueue, formatCanvasState, validateCommand } from "./canvas.mjs";
 import { StudyStore, formatStudyStats } from "./study.mjs";
-import { LearningStore, formatLearningContext, createLearningMcpServer, learningProgress } from "./learning.mjs";
+import { LearningStore, formatLearningContext, createLearningMcpServer, learningProgress, scopeKey } from "./learning.mjs";
+import { planNext, formatPlanForPrompt, pickNext } from "./planner.mjs";
 import { createAuth } from "./auth.mjs";
 import { HostIdentity } from "./identity.mjs";
 import { reachableAddresses } from "./network.mjs";
@@ -430,6 +431,39 @@ const learningStore = new LearningStore(WORKSPACE, {
   },
 });
 const pdfIndex = new PdfIndex(WORKSPACE);
+
+/**
+ * Study time is logged on the tablet; it reports this week's minutes per project when
+ * it asks for a plan or sends a chat turn. Kept for the week it was reported in, so
+ * the tutor's plan can use it between reports.
+ */
+const studyTimeReports = new Map();
+const WEEK_REPORT_MS = 7 * 24 * 3600 * 1000;
+
+function noteStudyTime(project, week) {
+  if (!week || typeof week !== "object") return;
+  const studiedMinutes = Number(week.studiedMinutes);
+  const daysLeft = Number(week.daysLeft);
+  if (!Number.isFinite(studiedMinutes) || !Number.isFinite(daysLeft)) return;
+  studyTimeReports.set(scopeKey(project), {
+    studiedMinutes: Math.max(0, studiedMinutes),
+    daysLeft: Math.max(1, Math.min(7, daysLeft)),
+    at: Date.now(),
+  });
+}
+
+/** The spaced study plan for one project, with the latest study time the tablet reported. */
+async function studyPlanFor(project, { sessionMinutes = null } = {}) {
+  const r = studyTimeReports.get(scopeKey(project));
+  const fresh = r && Date.now() - r.at < WEEK_REPORT_MS;
+  // A report from earlier in the week: the days left have gone down since.
+  const daysGone = fresh ? Math.floor((Date.now() - r.at) / (24 * 3600 * 1000)) : 0;
+  return planNext(await learningStore.snapshot(project), {
+    studiedMinutes: fresh ? r.studiedMinutes : 0,
+    daysLeft: fresh ? Math.max(1, r.daysLeft - daysGone) : 7,
+    sessionMinutes,
+  });
+}
 
 /** @type {Map<string, { sessionId: string, cwd: string }>} */
 const sessionMap = new Map();
@@ -1482,7 +1516,7 @@ function startAgentQuery({
     options.mcpServers = {
       ...(options.mcpServers || {}),
       // Only the chat's own project: the agent never sees another project's model.
-      learning: createLearningMcpServer(learningStore, { chatId: id, openFile, project }),
+      learning: createLearningMcpServer(learningStore, { chatId: id, openFile, project, planFor: studyPlanFor }),
     };
   }
   if (fresh) options.sessionId = sessionId;
@@ -2880,7 +2914,10 @@ app.post("/chat/preview", async (req, res) => {
       canvasState: await canvasQueue.getState(),
       studyStats: await studyStore.getStats(),
       learningCtx: learning
-        ? formatLearningContext(await learningStore.snapshot(typeof project === "string" ? project : ""), { openFile })
+        ? formatLearningContext(await learningStore.snapshot(typeof project === "string" ? project : ""), {
+            openFile,
+            planText: formatPlanForPrompt(await studyPlanFor(typeof project === "string" ? project : "")),
+          })
         : null,
       pageView: allowPageView !== false,
     }),
@@ -3255,7 +3292,10 @@ async function handleChatRequest(req, res, { stream }) {
     project = null,
     learningMode = null,
     allowPageView = true,
+    studyWeek = null,
   } = req.body || {};
+  // This week's study time in the project, from the tablet's log (for the study plan).
+  noteStudyTime(typeof project === "string" ? project : "", studyWeek);
   // The app sends its switch with every message; the stored setting is the fallback.
   const learning = typeof learningMode === "boolean" ? learningMode : learningStore.isEnabled();
   // Settings → AI: whether the agent may look at the user's pages at all.
@@ -3323,7 +3363,10 @@ async function handleChatRequest(req, res, { stream }) {
             for (const d of savedDocs) {
               if (d.role !== "reference") await learningStore.notePendingDocument(d.path, s.project);
             }
-            return formatLearningContext(await learningStore.snapshot(s.project), { openFile });
+            return formatLearningContext(await learningStore.snapshot(s.project), {
+              openFile,
+              planText: formatPlanForPrompt(await studyPlanFor(s.project)),
+            });
           })()
         : null,
       pageView,
@@ -3498,6 +3541,89 @@ app.get("/learning/state", async (req, res) => {
 app.get("/learning/progress", async (req, res) => {
   try {
     res.json(learningProgress(await learningStore.snapshot(learningProject(req))));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * What to study next in one project (see planner.mjs). The tablet passes this week's
+ * study time in the project: ?studiedMin=&daysLeft= (today included); ?sessionMin=
+ * plans a session of that length instead of what the weekly goal asks.
+ */
+app.get("/learning/plan", async (req, res) => {
+  try {
+    const project = learningProject(req);
+    if (req.query?.studiedMin != null) {
+      noteStudyTime(project, { studiedMinutes: req.query.studiedMin, daysLeft: req.query.daysLeft ?? 7 });
+    }
+    const minutes = Number(req.query?.sessionMin);
+    res.json(await studyPlanFor(project, { sessionMinutes: minutes > 0 ? minutes : null }));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * The one thing to study next across all projects. The tablet sends this week's study
+ * time per document ({ docMinutes: { path: minutes }, daysLeft }); it is summed per
+ * project here, where it is known which folder is a project.
+ */
+app.post("/learning/next", async (req, res) => {
+  try {
+    const docMinutes = req.body?.docMinutes && typeof req.body.docMinutes === "object" ? req.body.docMinutes : {};
+    const daysLeft = Number(req.body?.daysLeft) || 7;
+    const perProject = new Map();
+    for (const [doc, min] of Object.entries(docMinutes)) {
+      const m = Number(min);
+      if (!(m > 0)) continue;
+      let key = "";
+      try {
+        const dir = await projectDirOf(assertInsideWorkspace(doc));
+        key = dir ? scopeKey(relWorkspace(dir)) : "";
+      } catch {
+        continue;
+      }
+      perProject.set(key, (perProject.get(key) || 0) + m);
+    }
+    const all = await learningStore.snapshotAll();
+    const keys = new Set([...Object.keys(all.projects || {}), ...perProject.keys()]);
+    const entries = [];
+    for (const key of keys) {
+      noteStudyTime(key, { studiedMinutes: perProject.get(key) || 0, daysLeft });
+      entries.push({ project: key, plan: await studyPlanFor(key) });
+    }
+    const ranked = pickNext(entries);
+    const view = (r) => ({
+      project: r.project,
+      projectName: r.project ? path.basename(r.project) : "",
+      item: r.item,
+      weeklyGoalMinutes: r.plan.weeklyGoalMinutes,
+      studiedMinutes: r.plan.studiedMinutes,
+      sessionMinutes: r.plan.sessionMinutes,
+    });
+    let soonest = null;
+    for (const e of entries) {
+      if (e.plan.nextReviewAt && (!soonest || e.plan.nextReviewAt < soonest.at)) {
+        soonest = { at: e.plan.nextReviewAt, concept: e.plan.nextReviewConcept, project: e.project };
+      }
+    }
+    res.json({
+      next: ranked[0] ? view(ranked[0]) : null,
+      alternatives: ranked.slice(1, 4).map(view),
+      nextReview: soonest,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/** Set (or with 0 clear) the weekly study-time goal of a project: { project, minutes }. */
+app.post("/learning/weekly-goal", async (req, res) => {
+  try {
+    const r = await learningStore.setWeeklyGoal({ project: learningProject(req), minutes: req.body?.minutes });
+    if (!r.accepted) return res.status(400).json({ error: r.message });
+    res.json(r);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

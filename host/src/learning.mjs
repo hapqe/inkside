@@ -213,6 +213,20 @@ export class LearningStore {
     });
   }
 
+  /** Minutes a week the student means to study this project; 0 clears it. */
+  setWeeklyGoal({ project = "", minutes }) {
+    const m = Math.round(Number(minutes));
+    if (!(m >= 0 && m <= 7 * 24 * 60)) {
+      return Promise.resolve({ accepted: false, message: "minutes must be between 0 and a week" });
+    }
+    return this.update((st) => {
+      const s = this.scope(st, project);
+      if (m) s.weeklyGoalMinutes = m;
+      else delete s.weeklyGoalMinutes;
+      return { accepted: true, weeklyGoalMinutes: m };
+    });
+  }
+
   /** Forget one project's model; the other projects keep theirs. */
   reset(project = "") {
     return this.update((s) => {
@@ -568,6 +582,7 @@ export function learningProgress(state) {
     goals: { total: goalsTotal, ...statusCounts },
     documents,
     pendingDocs: (state.pendingDocs || []).filter((d) => !state.goals?.[d]),
+    weeklyGoalMinutes: state.weeklyGoalMinutes || 0,
     updatedAt: state.updatedAt || null,
     levelOrder: LEVELS,
   };
@@ -579,7 +594,7 @@ export function learningProgress(state) {
  * and the open document's goals. Per turn (not in
  * the session preamble) so switching the mode takes effect in every chat at once.
  */
-export function formatLearningContext(state, { openFile = "" } = {}) {
+export function formatLearningContext(state, { openFile = "", planText = null } = {}) {
   const lines = [
     "[Learning Mode is ON — adaptive tutoring]",
     "Goal: give enough help for learning without replacing the student's own thinking.",
@@ -645,11 +660,12 @@ export function formatLearningContext(state, { openFile = "" } = {}) {
     lines.push("", "New documents without learning goals (identify their tasks when they come up):");
     for (const d of pending) lines.push(`- ${d}`);
   }
+  if (planText) lines.push(planText);
   return lines.join("\n");
 }
 
 /** Per-run MCP server exposing the learner model to the agent. */
-export function createLearningMcpServer(store, { chatId = "", openFile = "", project = "" } = {}) {
+export function createLearningMcpServer(store, { chatId = "", openFile = "", project = "", planFor = null } = {}) {
   const docDefault = String(openFile || "").split(",")[0].trim();
   const ok = (o) => ({ content: [{ type: "text", text: JSON.stringify(o, null, 2) }] });
   const fail = (o) => ({ content: [{ type: "text", text: JSON.stringify(o, null, 2) }], isError: true });
@@ -676,6 +692,21 @@ export function createLearningMcpServer(store, { chatId = "", openFile = "", pro
           return ok({ levels: LEVELS, concepts, document: doc || null, goals: doc ? s.goals[doc]?.items || [] : [] });
         }
       ),
+      ...(planFor
+        ? [
+            tool(
+              "study_plan",
+              "What the student should study next in this project: due spaced reviews (each asks for the " +
+                "next rung on the ladder), open goals whose topics are in place, and missing prerequisites " +
+                "to learn first, sized to the weekly time goal. Use it when the student asks what to do next " +
+                "or starts a study session without a task.",
+              {
+                minutes: z.number().int().min(5).max(240).optional().describe("plan a session this long"),
+              },
+              async (args) => ok(await planFor(project, { sessionMinutes: args?.minutes || null }))
+            ),
+          ]
+        : []),
       tool(
         "record_evidence",
         "Record where the student stands on a concept. You may claim 'explained' (source tutor). " +

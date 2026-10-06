@@ -162,13 +162,24 @@ adaptive tutor. The switch travels with each message (`learningMode` in
   student contributing between rungs (skipping needs a reason).
 - **Verification.** After an explanation or a finished task the tutor asks an
   understanding or transfer question; the answer decides the next step.
+- **Weekly goal and study plan.** A project can have a weekly study-time goal.
+  `src/planner.mjs` decides what to study next: topics come back for review
+  after an interval that grows with their level and with each repeated showing
+  (a slip resets it), and never before they are due; a review asks for the next
+  rung. Open goals start only once their topics have been met — missing ones
+  are learned first (at most two new topics a session). The session is sized to
+  what the weekly goal still needs per remaining day; the tablet reports this
+  week's study time (`studyWeek` in `/chat/stream`, or the plan request).
 
 The agent works through the `learning` MCP tools (`learner_state`,
-`record_evidence`, `set_goals`, `hint_step`, `complete_goal`); the policy and a
-compact learner summary go into each turn's prompt while the mode is on.
+`record_evidence`, `set_goals`, `hint_step`, `complete_goal`, `study_plan`);
+the policy, a compact learner summary and the top of the study plan go into
+each turn's prompt while the mode is on.
 `GET /learning/state?project=` (counts), `GET /learning/model` (everything,
-or one project with `?project=`) and `POST /learning/reset` (`{project}`, one
-project only) are for the app.
+or one project with `?project=`), `POST /learning/reset` (`{project}`, one
+project only), `GET /learning/plan?project=&studiedMin=&daysLeft=` and
+`POST /learning/weekly-goal` (`{project, minutes}`, 0 clears it) are for the
+app.
 
 ## Page viewing
 

@@ -209,8 +209,48 @@ final class Conversations {
         act.persistence.scheduleSave();
     }
 
+    /** No message in it yet (and nothing running): what "New chat" would make anyway. */
+    private boolean isEmptyChat(ChatSession c) {
+        return c != null && c.log.toString().trim().isEmpty() && !isChatStreaming(c.id);
+    }
+
+    /**
+     * Drops the active project's surplus empty chats (no messages, no draft), keeping one:
+     * the open chat if it is empty, else the newest. Earlier builds let them pile up.
+     */
+    private void pruneExtraEmptyChats() {
+        ChatSession keep = null;
+        ChatSession active = findChat(act.activeChatId);
+        if (chatBelongsToActiveProject(active) && isEmptyChat(active)) keep = active;
+        java.util.List<ChatSession> extra = new java.util.ArrayList<>();
+        for (ChatSession c : act.chats) {
+            if (!chatBelongsToActiveProject(c) || !isEmptyChat(c)) continue;
+            if (c.draft != null && !c.draft.trim().isEmpty()) continue;
+            if (keep == null) keep = c;
+            else if (c != keep) extra.add(c);
+        }
+        if (extra.isEmpty()) return;
+        act.chats.removeAll(extra);
+        refreshChatTabs();
+        act.persistence.scheduleSave();
+    }
+
+    /**
+     * A new chat in the active project — unless the project already has an empty one,
+     * which is opened instead: one empty chat per project is enough.
+     */
     void createNewChat() {
         syncActiveFromUi();
+        pruneExtraEmptyChats();
+        for (ChatSession existing : act.chats) {
+            if (!chatBelongsToActiveProject(existing) || !isEmptyChat(existing)) continue;
+            if (!existing.id.equals(act.activeChatId)) {
+                loadChatIntoUi(existing);
+                act.persistence.scheduleSave();
+            }
+            if (act.chatInput != null) act.chatInput.requestFocus();
+            return;
+        }
         ChatSession c = new ChatSession(newChatId(), "New chat");
         c.projectPath = act.activeProjectPath != null ? act.activeProjectPath : "";
         act.chats.add(0, c);
@@ -402,6 +442,57 @@ final class Conversations {
         return new PendingAttachment(name, mimeType, bytes, image);
     }
 
+    /** What the tutor is asked when checking work: find the mistakes, keep the solving to me. */
+    private static final String CHECK_WORK_PROMPT =
+            "Check my work in the attached picture. Point out each mistake and where my "
+                    + "reasoning goes wrong, and give me a hint for each so I can fix it myself "
+                    + "- don't give me the full solution. If everything is right, say so briefly.";
+
+    /**
+     * Sends the selection, or else the whole current page, to the tutor to be checked.
+     * The page is rendered whole, not just the part on screen.
+     */
+    void checkMyWork() {
+        if (act.canvas == null || !act.canvas.hasDocument()) {
+            act.snackbar("Open a document first", false);
+            return;
+        }
+        if (!act.aiEnabled || !act.computers.hasHost()) {
+            act.snackbar("Checking work needs a connected computer", false);
+            return;
+        }
+        if (act.canvas.hasActiveSelection() || act.canvas.hasLassoRegion()) {
+            android.graphics.RectF bounds = act.canvas.getCaptureBoundsWorld();
+            byte[] png = bounds != null ? act.canvas.captureRegionPng(bounds, 1600) : null;
+            sendForChecking(png);
+            return;
+        }
+        int page = Math.max(0, act.canvas.currentPageIndex());
+        act.snackbar("Checking page " + (page + 1) + "\u2026", false);
+        act.canvas.renderPage(page, 1600, 2200, true, bmp -> act.runOnUiThread(() -> {
+            if (bmp == null) {
+                sendForChecking(null);
+                return;
+            }
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 92, bos);
+            bmp.recycle();
+            sendForChecking(bos.toByteArray());
+        }));
+    }
+
+    private void sendForChecking(byte[] png) {
+        if (png == null || png.length == 0) {
+            act.snackbar("Could not capture the page", false);
+            return;
+        }
+        act.pendingAttachments.add(new PendingAttachment("check-my-work.png", "image/png", png, true));
+        refreshAttachRow();
+        if (act.zenMode) act.zen.exitZenMode();
+        if (act.chatCollapsed) act.chatView.animateChatToExpanded(act.chatView.chatPanelWidth());
+        sendTextViaChat(CHECK_WORK_PROMPT);
+    }
+
     void addSelectionScreenshotToChat() {
         if (act.canvas == null) return;
         android.graphics.RectF bounds = act.canvas.getCaptureBoundsWorld();
@@ -448,6 +539,7 @@ final class Conversations {
         } else {
             refreshChatTabs();
         }
+        pruneExtraEmptyChats();
     }
 
     /**

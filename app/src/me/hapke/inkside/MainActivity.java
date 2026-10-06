@@ -22,6 +22,7 @@ import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.VelocityTracker;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowInsets;
 import android.view.ViewGroup;
@@ -69,6 +70,8 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
     final CodeEditor codeEditor = new CodeEditor(this);
     final ExplorerPanel explorer = new ExplorerPanel(this);
     final Projects projects = new Projects(this);
+    final StudyNext studyNext = new StudyNext(this);
+    final Stickers stickers = new Stickers(this);
     final ArtifactOverlays artifacts = new ArtifactOverlays(this);
     final Dictation dictation = new Dictation(this);
     final InstantChat instantChat = new InstantChat(this);
@@ -202,6 +205,17 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
             });
     final List<View> colorButtons = new ArrayList<>();
     ImageView pencilButton;
+    ImageView highlighterButton;
+    ImageView tapeButton;
+    ImageView shapesButton;
+    ImageView stickersButton;
+    /** The sticker strip in the option row, while the sticker tool is open. */
+    View stickerStrip;
+    /** Shape tool options: which shape, fill, border and its width. */
+    View shapeOptions;
+    ImageView shapeKindButton;
+    View shapeFillSwatch;
+    View shapeBorderSwatch;
     ImageView eraserButton;
     ImageView lassoButton;
     private ImageView addToChatButton;
@@ -343,6 +357,11 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
             0xFF22D3EE, 0xFFF472B6, 0xFFA3E635, 0xFFFBBF24, 0xFFA78BFA
     };
 
+    /** Tape colours to start from: masking-tape beige and pastels. */
+    static final int[] TAPE_COLORS = {
+            0xFFF1E3B0, 0xFFFFB3C7, 0xFFA8E6CF, 0xFF9FC5F8, 0xFFD7C4F2
+    };
+
     final PenTools.PenState[] pens = new PenTools.PenState[CodeCanvasView.BRUSH_COUNT];
 
     {
@@ -350,6 +369,7 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
             PenTools.PenState p = new PenTools.PenState();
             System.arraycopy(b == CodeCanvasView.BRUSH_INK ? INK_COLORS : GLOW_COLORS,
                     0, p.slots, 0, 5);
+            if (b == CodeCanvasView.BRUSH_TAPE) System.arraycopy(TAPE_COLORS, 0, p.slots, 0, 5);
             switch (b) {
                 case CodeCanvasView.BRUSH_HIGHLIGHTER: p.thickness = 50; break;
                 case CodeCanvasView.BRUSH_CALLIGRAPHY: p.thickness = 45; break;
@@ -377,6 +397,15 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
 
     /** Brush for new strokes; each brush is a pen with its own {@link PenState}. */
     int brush = CodeCanvasView.BRUSH_INK;
+    /** The pen's own brush, which the pen button goes back to from the highlighter. */
+    int penBrush = CodeCanvasView.BRUSH_INK;
+    /** Pen or highlighter, whichever was picked last: where the stylus button returns to. */
+    int writingBrush = CodeCanvasView.BRUSH_INK;
+    /** The shape tool: shape, fill (0 = none), border colour (0 = none) and border width. */
+    int shapeKind = ShapeLibrary.RECTANGLE;
+    int shapeFill = 0;
+    int shapeBorder = 0xFF4C8DFF;
+    float shapeBorderWidth = 3f;
 
     // App chrome colors (mutable via options)
     int M3_SURFACE = 0xFF13131A;
@@ -476,6 +505,7 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         localWorkspace.seedIfEmpty();
         learningMode = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_LEARNING_MODE, false);
         bridge.setLearningMode(learningMode);
+        bridge.setStudyLog(studyLog);
         agentSeesPages = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AGENT_SEES_PAGES, true);
         bridge.setAllowPageView(agentSeesPages);
         java.io.File profileDir = Profiles.filesDir(this, profile);
@@ -896,6 +926,11 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
             }
 
             @Override
+            public void onLinkTapped(String doc, int page) {
+                openDocumentPage(doc, page);
+            }
+
+            @Override
             public void onCanvasLongPress(float worldX, float worldY, float screenX, float screenY) {
                 canvasPaste.showCanvasLongPressMenu(worldX, worldY, screenX, screenY);
             }
@@ -930,6 +965,21 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
             @Override
             public void onUndoScrubEnd() {
                 undoScrubber.endUndoScrub();
+            }
+
+            @Override
+            public void onDocSwitchStart(float x, float y, boolean up) {
+                beginDocSwitch(x, y, up);
+            }
+
+            @Override
+            public void onDocSwitchDrag(float dy) {
+                if (docSwitcher != null) docSwitcher.drag(dy);
+            }
+
+            @Override
+            public void onDocSwitchEnd() {
+                endDocSwitch();
             }
 
             @Override
@@ -1162,8 +1212,16 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         mainRow.addView(redoButton, iconLp());
         mainRow.addView(toolDivider());
 
-        pencilButton = iconBtn(R.drawable.ic_pencil, () -> penTools.selectPencil(selectedColorIndex));
+        pencilButton = iconBtn(R.drawable.ic_pencil, penTools::selectPen);
         favorites.bindFavoriteLongPress(pencilButton, FavoritesStore.TOOL_PENCIL);
+        highlighterButton = iconBtn(R.drawable.ic_highlighter, penTools::selectHighlighter);
+        highlighterButton.setContentDescription("Highlighter");
+        tapeButton = iconBtn(R.drawable.ic_tape, penTools::selectTape);
+        tapeButton.setContentDescription("Tape: drag over something to cover it, tap a tape to lift it");
+        shapesButton = iconBtn(R.drawable.ic_shapes, penTools::selectShape);
+        shapesButton.setContentDescription("Shapes");
+        stickersButton = iconBtn(R.drawable.ic_sticker, this::toggleStickersPanel);
+        stickersButton.setContentDescription("Stickers: drag one onto the page");
         eraserButton = iconBtn(R.drawable.ic_eraser, penTools::selectEraser);
         favorites.bindFavoriteLongPress(eraserButton, FavoritesStore.TOOL_ERASER);
         lassoButton = iconBtn(R.drawable.ic_lasso, penTools::selectLasso);
@@ -1183,6 +1241,10 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         mainRow.addView(eraserButton, iconLp());
         mainRow.addView(lassoButton, iconLp());
         mainRow.addView(textToolButton, iconLp());
+        mainRow.addView(highlighterButton, iconLp());
+        mainRow.addView(tapeButton, iconLp());
+        mainRow.addView(shapesButton, iconLp());
+        mainRow.addView(stickersButton, iconLp());
         stopwatchButton = iconBtn(R.drawable.ic_timer, this::toggleStopwatchPanel);
         stopwatchButton.setContentDescription("Stopwatch");
         mainRow.addView(stopwatchButton, iconLp());
@@ -1239,6 +1301,22 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         pencilLp.setMargins(dp(SPACE_SM), 0, 0, 0);
         optionRow.addView(pencilOpts, pencilLp);
+
+        // Shape tool: the shape, its fill, its border and the border's width.
+        shapeOptions = penTools.buildShapeOptionsRow();
+        shapeOptions.setVisibility(View.GONE);
+        LinearLayout.LayoutParams shapeLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        shapeLp.setMargins(dp(SPACE_SM), 0, 0, 0);
+        optionRow.addView(shapeOptions, shapeLp);
+
+        // Sticker tool: the library as a strip, to drag from onto the page.
+        stickerStrip = stickers.buildStrip();
+        stickerStrip.setVisibility(View.GONE);
+        LinearLayout.LayoutParams stripLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        stripLp.setMargins(dp(SPACE_SM), 0, dp(SPACE_SM), 0);
+        optionRow.addView(stickerStrip, stripLp);
 
         // Eraser / lasso: target toggles.
         LinearLayout targets = new LinearLayout(this);
@@ -1385,16 +1463,13 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         selectionActions.addView(addToChatButton, iconLp());
         selectionActions.addView(cutSelButton, iconLp());
         selectionActions.addView(copySelButton, iconLp());
-        // Hidden in presentation: shown on the tablet, left off the slide.
-        presentHideButton = iconBtn(R.drawable.ic_visibility, () -> {
+        // Layer, flip and presentation visibility: less used, so behind ⋮.
+        selectionMoreButton = iconBtn(R.drawable.ic_more, () -> {
             if (canvas == null || !canvas.hasActiveSelection()) return;
-            boolean hidden = canvas.togglePresentHidden();
-            refreshPresentHideButton();
-            persistence.scheduleSave();
-            snackbar(hidden ? "Hidden in the presentation"
-                    : "Shown in the presentation", false);
+            overflowMenu.showSelectionMenu(selectionMoreButton);
         });
-        selectionActions.addView(presentHideButton, iconLp());
+        selectionMoreButton.setContentDescription("More selection actions");
+        selectionActions.addView(selectionMoreButton, iconLp());
         selectionActions.addView(deleteSelButton, iconLpLast());
         // Recolour: the palette's swatches, after a divider, when the selection holds
         // handwriting or plain text.
@@ -1523,6 +1598,12 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         frame.addView(undoScrub, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
+        docSwitcher = new DocSwitcherView(this);
+        docSwitcher.setVisibility(View.GONE);
+        docSwitcher.setElevation(dp(32));
+        frame.addView(docSwitcher, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
         return frame;
     }
 
@@ -1543,9 +1624,8 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         boolean showText = styleTf != null;
         boolean showActions = hasSelection || canRegion;
         selectionActions.setVisibility(showActions ? View.VISIBLE : View.GONE);
-        if (presentHideButton != null) {
-            presentHideButton.setVisibility(hasSelection ? View.VISIBLE : View.GONE);
-            if (hasSelection) refreshPresentHideButton();
+        if (selectionMoreButton != null) {
+            selectionMoreButton.setVisibility(hasSelection ? View.VISIBLE : View.GONE);
         }
         if (selectionColorRow != null) {
             // With a text box selected the text style bar already offers its colours;
@@ -1575,17 +1655,8 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         if (showActions || showText) positionFloatingSelectionActions();
     }
 
-    /** Text field that owns the font/style floating bar (selected or mid-edit). */
-    private ImageView presentHideButton;
-
-    /** Open eye = on the slide; crossed-out eye = hidden in the presentation. */
-    private void refreshPresentHideButton() {
-        if (presentHideButton == null || canvas == null) return;
-        boolean hidden = canvas.selectionPresentHidden();
-        presentHideButton.setImageResource(hidden ? R.drawable.ic_visibility_off : R.drawable.ic_visibility);
-        applyIconSelected(presentHideButton, hidden);
-        presentHideButton.setContentDescription(hidden ? "Show in presentation" : "Hide in presentation");
-    }
+    /** ⋮ on the selection bar: layer, flip, presentation visibility. */
+    ImageView selectionMoreButton;
 
     /** Recolour swatches in the selection action bar (the palette in use). */
     private LinearLayout selectionColorRow;
@@ -2003,9 +2074,6 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         // so they kept the launch theme's colour next to correctly tinted neighbours.
         retintIdleIcons(navPill);
         retintIdleIcons(selectionActions);
-        if (presentHideButton != null && canvas != null && canvas.hasActiveSelection()) {
-            refreshPresentHideButton();
-        }
         if (editSelButton != null) applyIconSelected(editSelButton, false);
         if (deleteSelButton != null) applyIconSelected(deleteSelButton, false);
         if (openFileButton != null) applyIconSelected(openFileButton, !explorerCollapsed);
@@ -2059,8 +2127,22 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         refreshStopwatchButton();
     }
 
+    boolean stickersSelected;
+
+    /** The sticker tool opens the sticker strip in the option row; the drawing tool stays. */
+    void toggleStickersPanel() {
+        stickersSelected = !stickersSelected;
+        if (stickersSelected) {
+            stopwatchSelected = false;
+            stickers.refreshStrip();
+            if (!toolOptionsExpanded) penTools.setToolOptionsExpanded(true);
+        }
+        penTools.refreshToolSelection();
+    }
+
     private void toggleStopwatchPanel() {
         stopwatchSelected = !stopwatchSelected;
+        if (stopwatchSelected) stickersSelected = false;
         // Its controls live in the option row, so opening it from a collapsed bar
         // expands the bar too.
         if (stopwatchSelected && !toolOptionsExpanded) penTools.setToolOptionsExpanded(true);
@@ -2167,6 +2249,187 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
 
     /** Canvas lift while in Zen: well above every panel, pill and FAB elevation. */
     static final int ZEN_LIFT_DP = 200;
+
+    /**
+     * Height of panels and menus over the canvas (Settings, Study week, Learning, …):
+     * above the floating chat (bubble 12, mini chat 40), status chip 50 and colour panels
+     * 60; below snackbars (80), so messages stay readable over an open panel.
+     */
+    static final int PANEL_Z_DP = 70;
+
+    /** Lifts a panel overlay to {@link #PANEL_Z_DP}, and above the canvas in Zen. */
+    /** Opens {@code doc} ("" or the open one = stay) at document page {@code page}. */
+    void openDocumentPage(String doc, int page) {
+        if (canvas == null) return;
+        String current = canvas.getDocumentPath();
+        if (doc == null || doc.isEmpty() || doc.equals(current)) {
+            canvas.revealDocumentPage(Math.max(0, Math.min(page, canvas.getDocumentPageCount() - 1)));
+            return;
+        }
+        documents.openPdfDocument(doc, () -> {
+            projects.ensureProjectForDocument(doc);
+            canvas.revealDocumentPage(Math.max(0, Math.min(page, canvas.getDocumentPageCount() - 1)));
+        });
+    }
+
+    // ---- Two-finger swipe: the chat follows the fingers, anywhere on the screen -------
+
+    /** Settings → Gestures. */
+    boolean twoFingerChatSwipe = true;
+    private static final int TWO_IDLE = 0, TWO_ARMED = 1, TWO_SLIDE = 2, TWO_DONE = 3;
+    private int twoState = TWO_IDLE;
+    private float twoStartX, twoStartY, twoOriginX;
+    private final android.util.SparseArray<Float> twoPointerStartX = new android.util.SparseArray<>();
+    private float twoLastX, twoVelX;
+    private long twoLastMs;
+
+    private static float meanX(MotionEvent e) {
+        float s = 0f;
+        for (int i = 0; i < e.getPointerCount(); i++) s += e.getRawX(i);
+        return s / Math.max(1, e.getPointerCount());
+    }
+
+    private static float meanY(MotionEvent e) {
+        float s = 0f;
+        for (int i = 0; i < e.getPointerCount(); i++) s += e.getRawY(i);
+        return s / Math.max(1, e.getPointerCount());
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent ev) {
+        if (twoFingerChatSwipe && handleTwoFingerChat(ev)) return true;
+        return super.dispatchTouchEvent(ev);
+    }
+
+    /**
+     * Two fingers swiping sideways anywhere on the screen pull the chat out (or push it
+     * away) by exactly as much as they move; let go and it settles open or closed. Both
+     * fingers have to travel the same way, so a pinch is never taken for a swipe. Once
+     * it takes hold the views underneath get a cancel and the rest of the touch is its.
+     */
+    private boolean handleTwoFingerChat(MotionEvent ev) {
+        int action = ev.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) twoState = TWO_IDLE;
+        if (twoState == TWO_DONE) {
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) twoState = TWO_IDLE;
+            return true;
+        }
+        if (twoState == TWO_SLIDE) {
+            float x = meanX(ev);
+            long now = ev.getEventTime();
+            if (action == MotionEvent.ACTION_MOVE) {
+                long dt = Math.max(1L, now - twoLastMs);
+                float v = (x - twoLastX) * 1000f / dt;
+                twoVelX = twoVelX * 0.6f + v * 0.4f;
+                twoLastX = x;
+                twoLastMs = now;
+                chatView.dragGestureSlide(x - twoOriginX);
+                return true;
+            }
+            if (action == MotionEvent.ACTION_POINTER_UP || action == MotionEvent.ACTION_UP
+                    || action == MotionEvent.ACTION_CANCEL) {
+                chatView.endGestureSlide(twoVelX);
+                twoState = action == MotionEvent.ACTION_POINTER_UP ? TWO_DONE : TWO_IDLE;
+                return true;
+            }
+            return true;
+        }
+        if (action == MotionEvent.ACTION_POINTER_DOWN && ev.getPointerCount() == 2 && twoState == TWO_IDLE) {
+            if (chatPanel == null || !computers.hasHost() || !aiEnabled) return false;
+            twoState = TWO_ARMED;
+            twoStartX = meanX(ev);
+            twoStartY = meanY(ev);
+            twoPointerStartX.clear();
+            for (int i = 0; i < 2; i++) twoPointerStartX.put(ev.getPointerId(i), ev.getRawX(i));
+            return false;
+        }
+        if (twoState != TWO_ARMED) return false;
+        if (action == MotionEvent.ACTION_MOVE && ev.getPointerCount() == 2) {
+            float dx = meanX(ev) - twoStartX, dy = meanY(ev) - twoStartY;
+            if (Math.abs(dy) > dp(28) && Math.abs(dy) > Math.abs(dx)) {
+                twoState = TWO_IDLE;  // scrolling or panning, not a swipe
+                return false;
+            }
+            if (Math.abs(dx) < dp(20) || Math.abs(dx) < Math.abs(dy) * 1.5f) return false;
+            // Each finger has gone the same way, and well: a pinch moves them apart.
+            for (int i = 0; i < 2; i++) {
+                Float sx = twoPointerStartX.get(ev.getPointerId(i));
+                if (sx == null) return false;
+                float pdx = ev.getRawX(i) - sx;
+                if (Math.signum(pdx) != Math.signum(dx) || Math.abs(pdx) < dp(10)) return false;
+            }
+            // Only the way that makes sense: out when it is closed, away when it is open.
+            boolean towardEdge = chatOnLeft ? dx < 0 : dx > 0;
+            if (chatCollapsed == towardEdge) {
+                twoState = TWO_IDLE;
+                return false;
+            }
+            if (!chatView.beginGestureSlide()) {
+                twoState = TWO_IDLE;
+                return false;
+            }
+            MotionEvent cancel = MotionEvent.obtain(ev);
+            cancel.setAction(MotionEvent.ACTION_CANCEL);
+            super.dispatchTouchEvent(cancel);
+            cancel.recycle();
+            twoState = TWO_SLIDE;
+            // The motion that armed it counts: the chat starts where the fingers are.
+            twoOriginX = twoStartX;
+            twoLastX = meanX(ev);
+            twoLastMs = ev.getEventTime();
+            twoVelX = 0f;
+            chatView.dragGestureSlide(twoLastX - twoOriginX);
+            return true;
+        }
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL
+                || action == MotionEvent.ACTION_POINTER_UP) {
+            twoState = TWO_IDLE;
+        }
+        return false;
+    }
+
+    /** The three-finger document switcher, over everything like the undo scrubber. */
+    DocSwitcherView docSwitcher;
+    private static final int DOC_SWITCH_MAX = 8;
+
+    /** Opens the switcher with the recent documents, the open one first. */
+    private void beginDocSwitch(float x, float y, boolean up) {
+        if (docSwitcher == null || canvas == null) return;
+        java.util.List<String> list = new java.util.ArrayList<>();
+        String open = canvas.getDocumentPath();
+        if (open != null && !open.isEmpty()) list.add(open);
+        for (String d : recentDocs) {
+            if (d == null || d.isEmpty() || list.contains(d)) continue;
+            if (!d.toLowerCase(java.util.Locale.ROOT).endsWith(".pdf")) continue;
+            list.add(d);
+            if (list.size() >= DOC_SWITCH_MAX) break;
+        }
+        if (list.size() < 2) {
+            snackbar("No other recent documents yet", false);
+            return;
+        }
+        int[] a = new int[2];
+        int[] b = new int[2];
+        canvas.getLocationInWindow(a);
+        undoScrubHost.getLocationInWindow(b);
+        docSwitcher.setColors(M3_SURFACE_CONTAINER_HIGHEST, M3_ON_SURFACE, M3_ON_SURFACE_VARIANT,
+                M3_PRIMARY, M3_PRIMARY_CONTAINER, M3_ON_PRIMARY_CONTAINER);
+        docSwitcher.bringToFront();
+        docSwitcher.begin(x + a[0] - b[0], y + a[1] - b[1], list, 0, up);
+    }
+
+    private void endDocSwitch() {
+        if (docSwitcher == null || !docSwitcher.isShowing()) return;
+        String pick = docSwitcher.selected();
+        docSwitcher.end();
+        if (pick != null) {
+            documents.openPdfDocument(pick, () -> projects.ensureProjectForDocument(pick));
+        }
+    }
+
+    void liftPanel(View overlay) {
+        overlay.setTranslationZ(dp(zenMode ? ZEN_LIFT_DP + PANEL_Z_DP : PANEL_Z_DP));
+    }
     boolean zenMode;
     @Override
     @SuppressWarnings("deprecation")
@@ -2222,6 +2485,10 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         }
         if (stopwatchSelected) {
             toggleStopwatchPanel();
+            return true;
+        }
+        if (stickersSelected) {
+            toggleStickersPanel();
             return true;
         }
         // From a document (or the empty canvas) back to the library.
@@ -3061,7 +3328,6 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         if (group == null) return;
         for (int i = 0; i < group.getChildCount(); i++) {
             View c = group.getChildAt(i);
-            if (c == presentHideButton) continue;
             if (c instanceof ImageView && c.isClickable()) applyIconSelected((ImageView) c, false);
             else if (c instanceof ViewGroup && !(c instanceof android.widget.AdapterView)) {
                 retintIdleIcons((ViewGroup) c);
@@ -3319,6 +3585,7 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         lp.gravity = Gravity.CENTER;
         overlay.addView(card, lp);
         overlay.setOnClickListener(v -> onOutsideTap.run());
+        liftPanel(overlay);
         return new View[] {overlay, card};
     }
 

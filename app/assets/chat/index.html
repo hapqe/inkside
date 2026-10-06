@@ -247,6 +247,22 @@
       100% { opacity: 1; transform: none; }
     }
     .msg.arrive { animation: msg-land 320ms cubic-bezier(0.05, 0.7, 0.1, 1) both; }
+    /* An empty chat: a quiet hint in the middle of the pane. */
+    #emptyHint {
+      display: none;
+      position: fixed;
+      inset: 0;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      text-align: center;
+      padding: 24px;
+      pointer-events: none;
+      color: var(--fg, #E6E1E9);
+    }
+    body.empty #emptyHint { display: flex; }
+    #emptyHint .title { font-size: 16px; opacity: 0.75; margin-bottom: 6px; }
+    #emptyHint .sub { font-size: 13px; opacity: 0.5; max-width: 260px; }
     .msg.you.arrive { transform-origin: 100% 100%; }
     .msg.agent.arrive { transform-origin: 0 100%; }
   </style>
@@ -254,12 +270,22 @@
 <body>
 <div id="activityBar"></div>
   <div id="log"></div>
+  <div id="emptyHint">
+    <div class="title">No messages yet</div>
+    <div class="sub">Ask about what is on your page, or ask for a hint on a task.</div>
+  </div>
   <script src="katex.min.js"></script>
   <script src="mhchem.min.js"></script>
   <script src="marked.min.js"></script>
   <script src="sanitize.js"></script>
   <script>
     const log = document.getElementById('log');
+    // The hint shows while the thread is empty, whatever empties or fills it.
+    function syncEmptyHint() {
+      document.body.classList.toggle('empty', log.childElementCount === 0);
+    }
+    new MutationObserver(syncEmptyHint).observe(log, { childList: true });
+    syncEmptyHint();
     const MATH_OPEN = '\uE000';
     const MATH_CLOSE = '\uE001';
     const LIVE_RENDER_MS = 80;

@@ -185,6 +185,52 @@ final class StudyLog {
         return out;
     }
 
+    /**
+     * Minutes studied between {@code from} and {@code to} with a document of
+     * {@code project} open (a workspace folder; null or empty counts everything).
+     */
+    synchronized long minutesIn(String project, long from, long to) {
+        String prefix = project == null || project.isEmpty() || ".".equals(project) ? null
+                : (project.endsWith("/") ? project : project + "/");
+        long ms = 0L;
+        for (Session s : range(from, to)) {
+            if (prefix != null && !s.doc.startsWith(prefix)) continue;
+            ms += Math.max(0L, Math.min(s.end, to) - Math.max(s.start, from));
+        }
+        return ms / 60_000L;
+    }
+
+    /** Minutes studied per document between {@code from} and {@code to}. */
+    synchronized java.util.Map<String, Long> minutesByDocument(long from, long to) {
+        java.util.Map<String, Long> out = new java.util.HashMap<>();
+        for (Session s : range(from, to)) {
+            if (s.doc.isEmpty()) continue;
+            long ms = Math.max(0L, Math.min(s.end, to) - Math.max(s.start, from));
+            Long prev = out.get(s.doc);
+            out.put(s.doc, (prev != null ? prev : 0L) + ms);
+        }
+        for (java.util.Map.Entry<String, Long> e : out.entrySet()) e.setValue(e.getValue() / 60_000L);
+        return out;
+    }
+
+    /** Days left in this week (Monday to Sunday), today included. */
+    static int daysLeftInWeek() {
+        int sinceMonday = (java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_WEEK) + 5) % 7;
+        return 7 - sinceMonday;
+    }
+
+    /** This week's study time in a project, as the host's study plan takes it. */
+    JSONObject weekReport(String project) {
+        JSONObject o = new JSONObject();
+        try {
+            long from = StudyWeekDialog.weekStart(0);
+            o.put("studiedMinutes", minutesIn(project, from, System.currentTimeMillis()));
+            o.put("daysLeft", daysLeftInWeek());
+        } catch (Exception ignored) {
+        }
+        return o;
+    }
+
     /** Start of the oldest recorded session, or -1 when nothing has been recorded. */
     synchronized long firstStart() {
         long first = openStart >= 0 ? openStart : -1L;

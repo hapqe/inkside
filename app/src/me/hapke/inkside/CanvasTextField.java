@@ -68,6 +68,13 @@ final class CanvasTextField {
     boolean presentHidden;
     /** Plain text only: never rendered as LaTeX/markdown (text dropped in from the chat). */
     boolean plainOnly;
+    /** A link chip: tapping it opens this document ("" = the same one) at {@link #linkPage}. */
+    String linkDoc;
+    int linkPage = -1;
+
+    boolean isLink() {
+        return linkPage >= 0;
+    }
 
     /** True when this field should go through the LaTeX/markdown bitmap renderer. */
     boolean wantsRender() {
@@ -266,6 +273,14 @@ final class CanvasTextField {
             boxPaint.setStyle(Paint.Style.FILL);
         }
 
+        if (isLink()) {
+            // A tinted pill behind the label, so a link reads as something to tap.
+            boxPaint.setStyle(Paint.Style.FILL);
+            boxPaint.setColor((color & 0x00FFFFFF) | 0x2E000000);
+            float r = Math.min(b.height() * 0.5f, 22f);
+            canvas.drawRoundRect(b, r, r, boxPaint);
+        }
+
         if (hasLatexBitmap()) {
             float bw = latexBitmap.getWidth() * latexWorldPerPx;
             float bh = latexBitmap.getHeight() * latexWorldPerPx;
@@ -332,6 +347,10 @@ final class CanvasTextField {
         o.put("contentBlock", contentBlock);
         if (presentHidden) o.put("presentHidden", true);
         if (plainOnly) o.put("plainOnly", true);
+        if (isLink()) {
+            o.put("linkDoc", linkDoc != null ? linkDoc : "");
+            o.put("linkPage", linkPage);
+        }
         o.put("hasLatex", containsLatex(text));
         return o;
     }
@@ -352,6 +371,8 @@ final class CanvasTextField {
         t.contentBlock = o.optBoolean("contentBlock", false);
         t.plainOnly = o.optBoolean("plainOnly", false);
         t.presentHidden = o.optBoolean("presentHidden", false);
+        t.linkPage = o.optInt("linkPage", -1);
+        t.linkDoc = t.linkPage >= 0 ? o.optString("linkDoc", "") : null;
         t.invalidateLayout();
         return t;
     }
@@ -369,6 +390,8 @@ final class CanvasTextField {
         d.contentBlock = contentBlock;
         d.plainOnly = plainOnly;
         d.presentHidden = presentHidden;
+        d.linkDoc = linkDoc;
+        d.linkPage = linkPage;
         // Must not share the bitmap: clearLatexBitmap/setLatexBitmap recycle it, which
         // would leave the other copy drawing a recycled bitmap and crash the canvas.
         if (latexBitmap != null && !latexBitmap.isRecycled()) {

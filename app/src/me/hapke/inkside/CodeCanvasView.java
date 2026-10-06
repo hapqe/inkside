@@ -117,10 +117,24 @@ public class CodeCanvasView extends View {
          * otherwise secondary. {@code down} is true on press, false on release.
          */
         default void onStylusButton(boolean primary, boolean down) {}
+
+        /** Three fingers started sliding up ({@code up}) or down: show the document switcher at (x, y). */
+        default void onDocSwitchStart(float x, float y, boolean up) {}
+
+        /** The fingers are {@code dy} px from where the switcher opened. */
+        default void onDocSwitchDrag(float dy) {}
+
+        /** The fingers lifted: open the document the switcher points at. */
+        default void onDocSwitchEnd() {}
+
+        /** A link chip was tapped: open {@code doc} ("" = this one) at page {@code page}. */
+        default void onLinkTapped(String doc, int page) {}
     }
 
     private static final float ERASE_RADIUS_PX = 28f;
     private static final float MAX_IMAGE_WORLD = 520f;
+    /** Longest side of a pasted or dropped image: about half a page wide, room to write beside it. */
+    private static final float MAX_PASTED_IMAGE_WORLD = 260f;
     /** Gap left between auto-placed canvas objects. */
     private static final float PLACEMENT_GAP = 96f;
 
@@ -220,11 +234,164 @@ public class CodeCanvasView extends View {
     /** Finger input is ignored for this long after the stylus lifts. */
     private static final long PALM_WINDOW_MS = 900L;
     private boolean palmRejection = true;
+    /**
+     * The current finger gesture's DOWN was swallowed as a palm, so the pan code never
+     * saw it start. Its later events must not reach that code as they are: the first
+     * move past the palm window was measured from the previous touch's down point,
+     * and the page jumped by the distance between the two.
+     */
+    private boolean palmHeldGesture;
+    /** The held gesture was a hand by its size: swallowed until it lifts, never restarted. */
+    private boolean palmBySize;
+    /** Camera when the current finger gesture began, put back if it turns out to be a palm. */
+    private float palmStartScrollX, palmStartScrollY, palmStartScale = Float.NaN;
     /** Hover-flick favorites + radial on primary pen hold. Off → hold is eraser only. */
     private boolean quickFavoritesEnabled = true;
 
     public boolean isPalmRejection() {
         return palmRejection;
+    }
+
+    // ---- Three-finger undo -------------------------------------------------------------
+
+    /** A three-finger drag left or right scrubs through undo/redo (Settings → Gestures). */
+    private boolean threeFingerUndo = true;
+    /** A quick three-finger tap opens the quick favorites where the fingers were. */
+    private boolean threeFingerFavorites = true;
+    private long threeDownMs;
+    private static final long THREE_TAP_MS = 350L;
+    private static final int THREE_NONE = 0, THREE_ARMED = 1, THREE_SCRUB = 2, THREE_DONE = 3,
+            THREE_DOCS = 4;
+    /** Three fingers sliding up or down switch documents (Settings → Gestures). */
+    private boolean threeFingerDocs = true;
+    private float threeOriginY;
+
+    public boolean isThreeFingerDocs() {
+        return threeFingerDocs;
+    }
+
+    public void setThreeFingerDocs(boolean on) {
+        threeFingerDocs = on;
+    }
+    private int threeState = THREE_NONE;
+    private float threeStartX, threeStartY, threeOriginX;
+
+    public boolean isThreeFingerUndo() {
+        return threeFingerUndo;
+    }
+
+    public void setThreeFingerUndo(boolean on) {
+        threeFingerUndo = on;
+    }
+
+    public boolean isThreeFingerFavorites() {
+        return threeFingerFavorites;
+    }
+
+    public void setThreeFingerFavorites(boolean on) {
+        threeFingerFavorites = on;
+    }
+
+    private float pointerMeanX(MotionEvent e) {
+        float sum = 0f;
+        for (int i = 0; i < e.getPointerCount(); i++) sum += e.getX(i);
+        return sum / Math.max(1, e.getPointerCount());
+    }
+
+    private float pointerMeanY(MotionEvent e) {
+        float sum = 0f;
+        for (int i = 0; i < e.getPointerCount(); i++) sum += e.getY(i);
+        return sum / Math.max(1, e.getPointerCount());
+    }
+
+    /**
+     * Three fingers down: whatever the first two began (a pan, a pinch) is undone, and a
+     * clear sideways drag opens the undo scrubber, dragged on by the fingers. Everything
+     * until the last finger lifts belongs to this gesture.
+     */
+    private boolean handleThreeFingerScrub(MotionEvent event, int action) {
+        // A new touch always starts clean, even if the last one's end went missing.
+        if (action == MotionEvent.ACTION_DOWN) threeState = THREE_NONE;
+        if (threeState == THREE_NONE) {
+            if (!(threeFingerUndo || threeFingerFavorites || threeFingerDocs)
+                    || action != MotionEvent.ACTION_POINTER_DOWN
+                    || event.getPointerCount() != 3 || !document.isOpen()) {
+                return false;
+            }
+            // End what two fingers started, and put the view back where it was.
+            if (!Float.isNaN(palmStartScale)) {
+                camScale = palmStartScale;
+                camScrollX = palmStartScrollX;
+                camScrollY = palmStartScrollY;
+                applyCamera();
+            }
+            MotionEvent cancel = MotionEvent.obtain(event);
+            cancel.setAction(MotionEvent.ACTION_CANCEL);
+            try {
+                onTouchEvent(cancel);
+            } finally {
+                cancel.recycle();
+            }
+            threeState = THREE_ARMED;
+            threeStartX = pointerMeanX(event);
+            threeStartY = pointerMeanY(event);
+            threeDownMs = event.getEventTime();
+            invalidate();
+            return true;
+        }
+        switch (action) {
+            case MotionEvent.ACTION_MOVE: {
+                float fx = pointerMeanX(event), fy = pointerMeanY(event);
+                if (threeState == THREE_ARMED) {
+                    float dx = fx - threeStartX, dy = fy - threeStartY;
+                    if (threeFingerUndo && Math.abs(dx) > touchSlop * 1.5f
+                            && Math.abs(dx) > Math.abs(dy) * 1.2f) {
+                        // Sideways: undo / redo.
+                        threeState = THREE_SCRUB;
+                        threeOriginX = threeStartX + Math.signum(dx) * touchSlop;
+                        performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK);
+                        if (listener != null) listener.onUndoScrubStart(threeStartX, threeStartY);
+                    } else if (threeFingerDocs && Math.abs(dy) > touchSlop * 1.5f
+                            && Math.abs(dy) > Math.abs(dx) * 1.2f) {
+                        // Up or down: switch documents.
+                        threeState = THREE_DOCS;
+                        threeOriginY = threeStartY + Math.signum(dy) * touchSlop;
+                        performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK);
+                        if (listener != null) listener.onDocSwitchStart(threeStartX, threeStartY, dy < 0);
+                    }
+                }
+                if (threeState == THREE_SCRUB && listener != null) {
+                    listener.onUndoScrubDrag(fx - threeOriginX);
+                }
+                if (threeState == THREE_DOCS && listener != null) {
+                    listener.onDocSwitchDrag(fy - threeOriginY);
+                }
+                return true;
+            }
+            case MotionEvent.ACTION_POINTER_UP: {
+                // The first finger off ends it; the rest of the lift is swallowed.
+                if (threeState == THREE_SCRUB && listener != null) listener.onUndoScrubEnd();
+                if (threeState == THREE_DOCS && listener != null) listener.onDocSwitchEnd();
+                // Down and up again quickly, barely moved: a tap — the quick favorites.
+                if (threeState == THREE_ARMED && threeFingerFavorites && listener != null
+                        && event.getEventTime() - threeDownMs <= THREE_TAP_MS
+                        && Math.hypot(pointerMeanX(event) - threeStartX,
+                                pointerMeanY(event) - threeStartY) < touchSlop * 1.5f) {
+                    performHapticFeedback(android.view.HapticFeedbackConstants.CONTEXT_CLICK);
+                    listener.onFavoritesRadialOpenRequested(threeStartX, threeStartY);
+                }
+                threeState = THREE_DONE;
+                return true;
+            }
+            case MotionEvent.ACTION_UP:
+            case MotionEvent.ACTION_CANCEL:
+                if (threeState == THREE_SCRUB && listener != null) listener.onUndoScrubEnd();
+                if (threeState == THREE_DOCS && listener != null) listener.onDocSwitchEnd();
+                threeState = THREE_NONE;
+                return true;
+            default:
+                return true;
+        }
     }
 
     public void setPalmRejection(boolean on) {
@@ -302,7 +469,80 @@ public class CodeCanvasView extends View {
             }
             return true;
         }
-        return System.currentTimeMillis() - lastStylusAtMs < PALM_WINDOW_MS;
+        // The hand itself: a contact far wider than a fingertip, pen or no pen.
+        if (palmSizedContact(event)) {
+            palmBySize = true;
+            return true;
+        }
+        // Just after the pen, a touch where the writing hand rests is that hand, even
+        // while its first contact is still small (the edge of the hand lands first).
+        // A finger anywhere else is the other hand, and gets through at once.
+        if (System.currentTimeMillis() - lastStylusAtMs < PALM_WINDOW_MS) {
+            return inWritingHandZone(event);
+        }
+        return false;
+    }
+
+    /** Puts the camera back where the gesture found it and ends the gesture; the rest is swallowed. */
+    private void cancelGestureAsPalm(MotionEvent event) {
+        if (!Float.isNaN(palmStartScale) && document.isOpen()) {
+            camScale = palmStartScale;
+            camScrollX = palmStartScrollX;
+            camScrollY = palmStartScrollY;
+            applyCamera();
+        }
+        MotionEvent cancel = MotionEvent.obtain(event);
+        cancel.setAction(MotionEvent.ACTION_CANCEL);
+        try {
+            onTouchEvent(cancel);
+        } finally {
+            cancel.recycle();
+        }
+        palmHeldGesture = true;
+        invalidate();
+    }
+
+    /** Fingertips touch 7–11 mm across; the side of a hand or a palm, well over this. */
+    private static final float PALM_CONTACT_MM = 16f;
+    /** How far from the nib the writing hand rests. */
+    private static final float HAND_REACH_MM = 110f;
+    /** How far above the nib the hand can still be (it mostly rests beside and below). */
+    private static final float HAND_ABOVE_MM = 20f;
+
+    private float mmToPx(float mm) {
+        android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+        float dpi = dm.xdpi > 1f ? dm.xdpi : dm.densityDpi;
+        return mm * dpi / 25.4f;
+    }
+
+    /**
+     * True when any finger contact in the event is as wide as a hand. Touchscreens
+     * that report no contact size give 0 here, and then only the time and place
+     * rules below apply.
+     */
+    private boolean palmSizedContact(MotionEvent event) {
+        float limit = mmToPx(PALM_CONTACT_MM);
+        for (int i = 0; i < event.getPointerCount(); i++) {
+            int tool = event.getToolType(i);
+            if (tool == MotionEvent.TOOL_TYPE_STYLUS || tool == MotionEvent.TOOL_TYPE_ERASER) continue;
+            if (Math.max(event.getTouchMajor(i), event.getToolMajor(i)) >= limit) return true;
+        }
+        return false;
+    }
+
+    /** True when a finger of this event lies where the hand holding the pen rests. */
+    private boolean inWritingHandZone(MotionEvent event) {
+        if (Float.isNaN(lastPenX)) return true;
+        float reach = mmToPx(HAND_REACH_MM);
+        float above = mmToPx(HAND_ABOVE_MM);
+        for (int i = 0; i < event.getPointerCount(); i++) {
+            int tool = event.getToolType(i);
+            if (tool == MotionEvent.TOOL_TYPE_STYLUS || tool == MotionEvent.TOOL_TYPE_ERASER) continue;
+            float dx = event.getX(i) - lastPenX;
+            float dy = event.getY(i) - lastPenY;
+            if (dy >= -above && dx * dx + dy * dy <= reach * reach) return true;
+        }
+        return false;
     }
 
     /** No pen event for this long with a stroke still open = the stroke is never coming back. */
@@ -1000,8 +1240,9 @@ public class CodeCanvasView extends View {
      * GPU copy of {@link #sceneBackdrop}, made on the rebuild thread, blitted while
      * scrolling. Drawing the 47MB software freeze made the render thread upload it
      * first — a janky frame after every mid-scroll redraw. Valid only while
-     * {@link #sceneBackdropHwFor} is the current backdrop; dropped when a gesture
-     * starts, since in-place edits (committed ink) do not reach it.
+     * {@link #sceneBackdropHwFor} is the current backdrop. Strokes stamped in place
+     * after it was made are drawn live over it ({@link #strokesOverHw}) until a fresh
+     * copy is made while the pen rests.
      */
     private Bitmap sceneBackdropHw;
     private Bitmap sceneBackdropHwFor;
@@ -1144,10 +1385,23 @@ public class CodeCanvasView extends View {
         org.json.JSONObject json;
         /** Cached draw geometry; see {@link StrokeGeom}. Dropped on any geometry change. */
         volatile StrokeGeom geom;
+        /**
+         * Samples as undo snapshots hold them, shared by every snapshot taken while the
+         * stroke is unchanged. Each pen-up snapshots the whole document; copying every
+         * stroke's samples each time cost time growing with the page and kept up to
+         * {@link #MAX_UNDO} copies of all the ink alive — enough to fill the heap.
+         * Never written once built; dropped on any geometry change.
+         */
+        float[] snapXs, snapYs, snapWs;
         /** Brush it was drawn with: {@link #BRUSH_INK} or one of the effect brushes. */
         int brush = BRUSH_INK;
         /** Left out of the presentation slide; still shown on the tablet. */
         boolean presentHidden;
+        /** {@link #BRUSH_SHAPE}: which {@link ShapeLibrary} shape, and its fill (0 = none). */
+        int shape;
+        int fill;
+        /** {@link #BRUSH_TAPE}: lifted, so what lies under it shows. */
+        boolean revealed;
 
         Stroke(int color, String colorName) {
             this.color = color;
@@ -1162,6 +1416,8 @@ public class CodeCanvasView extends View {
                     return false;
                 }
             }
+            if (brush == BRUSH_TAPE) return tapeContains(this, x, y, radius);
+            if (brush == BRUSH_SHAPE) return shapeFrameContains(this, x, y, radius);
             for (Sample p : samples) {
                 float dx = p.x - x;
                 float dy = p.y - y;
@@ -1174,6 +1430,7 @@ public class CodeCanvasView extends View {
         void recomputeBounds() {
             json = null;
             geom = null;
+            snapXs = snapYs = snapWs = null;
             if (samples.isEmpty()) {
                 bounds.setEmpty();
                 return;
@@ -1188,6 +1445,15 @@ public class CodeCanvasView extends View {
                 maxY = Math.max(maxY, p.y);
                 half = Math.max(half, p.width * 0.5f);
             }
+            // A shape's frame is three corners; the fourth closes the parallelogram.
+            if (brush == BRUSH_SHAPE && samples.size() >= 3) {
+                Sample a = samples.get(0), b = samples.get(1), c = samples.get(2);
+                float dx = b.x + c.x - a.x, dy = b.y + c.y - a.y;
+                minX = Math.min(minX, dx);
+                minY = Math.min(minY, dy);
+                maxX = Math.max(maxX, dx);
+                maxY = Math.max(maxY, dy);
+            }
             // A glow reaches well past the line itself.
             half *= brushReach(brush);
             // Include the brush so the box always has area. Sample-only bounds are
@@ -1201,6 +1467,7 @@ public class CodeCanvasView extends View {
         void translate(float dx, float dy) {
             json = null;
             geom = null;
+            snapXs = snapYs = snapWs = null;
             for (Sample p : samples) {
                 p.x += dx;
                 p.y += dy;
@@ -1212,6 +1479,9 @@ public class CodeCanvasView extends View {
             Stroke n = new Stroke(color, colorName);
             n.brush = brush;
             n.presentHidden = presentHidden;
+            n.shape = shape;
+            n.fill = fill;
+            n.revealed = revealed;
             for (Sample p : samples) {
                 n.samples.add(new Sample(p.x, p.y, p.width));
             }
@@ -1400,6 +1670,9 @@ public class CodeCanvasView extends View {
                     }
                     return true;
                 }
+                // Tapping a tape lifts it (or lays it back), whatever tool is in hand.
+                if (toggleTapeAt(wx, wy)) return true;
+                if (followLinkAt(wx, wy)) return true;
                 if (tapSelectAt(wx, wy)) return true;
                 return false;
             }
@@ -1582,9 +1855,14 @@ public class CodeCanvasView extends View {
 
     /** Draws {@link #deselectedStrokes} &c. in screen space over the blitted backdrop. */
     private void drawDeselectedPending(Canvas canvas) {
-        if (!hasDeselectedPending()) return;
+        boolean overHw = !strokesOverHw.isEmpty() && sceneBackdropHw != null
+                && displayBackdrop() == sceneBackdropHw;
+        if (!hasDeselectedPending() && !overHw) return;
         canvas.save();
         canvas.concat(viewMatrix);
+        if (overHw) {
+            for (Stroke st : strokesOverHw) drawStroke(canvas, st);
+        }
         // Undo or the eraser may have removed one since; only draw what still exists.
         for (CanvasTextField tf : deselectedTextFields) {
             if (textFields.contains(tf)) tf.draw(canvas, false);
@@ -1968,8 +2246,7 @@ public class CodeCanvasView extends View {
                 if (img.bitmap == null || img.bitmap.isRecycled()) continue;
                 CanvasImage dup = new CanvasImage(img.bitmap, img.cx, img.cy + dy,
                         img.width, img.height);
-                dup.presentHidden = img.presentHidden;
-                dup.rotationDeg = img.rotationDeg;
+                img.copyLookTo(dup);
                 nextImages.add(dup);
             }
             for (CanvasTextField tf : textsBy.get(i)) {
@@ -3014,6 +3291,7 @@ public class CodeCanvasView extends View {
         Thread t = new Thread(() -> {
             ExportLayer result;
             android.graphics.pdf.PdfDocument pdf = new android.graphics.pdf.PdfDocument();
+            plainHighlighter.set(true);
             try {
                 int pw = Math.max(1, Math.round(pageW));
                 int ph = Math.max(1, Math.round(pageH));
@@ -3128,6 +3406,296 @@ public class CodeCanvasView extends View {
         return true;
     }
 
+    // ---- Thickness of selected strokes and shape borders ---------------------------------
+
+    /** Widths before the thickness slider moved, so every step scales from the original. */
+    private java.util.IdentityHashMap<Stroke, float[]> thicknessBase;
+
+    /** Strokes and shapes in the selection the thickness applies to (not tape). */
+    private List<Stroke> thicknessTargets() {
+        List<Stroke> out = new ArrayList<>();
+        for (Stroke st : selectedStrokes) {
+            if (st.brush != BRUSH_TAPE && !st.samples.isEmpty()) out.add(st);
+        }
+        return out;
+    }
+
+    /** True when the selection has handwriting or shapes whose thickness can change. */
+    public boolean selectionHasThickness() {
+        return !thicknessTargets().isEmpty();
+    }
+
+    /** The selection's typical line width (world units): the mean of its strokes' widths. */
+    public float selectionThickness() {
+        List<Stroke> t = thicknessTargets();
+        if (t.isEmpty()) return 0f;
+        float sum = 0f;
+        for (Stroke st : t) sum += averageWidth(st.samples);
+        return sum / t.size();
+    }
+
+    /** Starts a thickness change: one undo step, however long the slider is dragged. */
+    public void beginThicknessEdit() {
+        recordUndoPoint();
+        thicknessBase = new java.util.IdentityHashMap<>();
+        for (Stroke st : thicknessTargets()) {
+            float[] w = new float[st.samples.size()];
+            for (int i = 0; i < w.length; i++) w[i] = st.samples.get(i).width;
+            thicknessBase.put(st, w);
+        }
+    }
+
+    /**
+     * Gives every selected stroke the line width {@code target} on average, keeping each
+     * one's own pressure variation; a shape's border becomes exactly {@code target}.
+     */
+    public void setSelectionThickness(float target) {
+        if (thicknessBase == null) beginThicknessEdit();
+        float w = Math.max(0.3f, Math.min(48f, target));
+        for (java.util.Map.Entry<Stroke, float[]> e : thicknessBase.entrySet()) {
+            Stroke st = e.getKey();
+            float[] base = e.getValue();
+            if (base.length != st.samples.size()) continue;
+            float mean = 0f;
+            for (float b : base) mean += b;
+            mean = base.length > 0 ? mean / base.length : 1f;
+            float k = mean > 0.0001f ? w / mean : 1f;
+            for (int i = 0; i < base.length; i++) st.samples.get(i).width = base[i] * k;
+            st.recomputeBounds();
+        }
+        selFrameValid = false;
+        recomputeSelectionFrame();
+        releaseSelDragBitmap();
+        invalidate();
+    }
+
+    public void endThicknessEdit() {
+        if (thicknessBase == null) return;
+        thicknessBase = null;
+        markSceneDirty();
+        invalidate();
+        notifyContentChanged();
+        notifySelectionLayout();
+    }
+
+    /** True when the selection holds handwriting or images: what layers and flips apply to. */
+    public boolean selectionHasInkOrImages() {
+        return !selectedStrokes.isEmpty() || !selectedImages.isEmpty();
+    }
+
+    /**
+     * Moves the selection to the top layer ({@code front}) or the bottom one. Images go
+     * to the layer over the handwriting or the one under it, so handwriting written
+     * later lands on top of an image sent to the back; handwriting and text move
+     * within their own layer. One undo step. Ends the selection: while selected, items
+     * are drawn over everything, which would hide the change.
+     */
+    public boolean moveSelectionToLayer(boolean front) {
+        if (!hasSelection()) return false;
+        recordUndoPoint();
+        restackToEnd(inkStrokes, selectedStrokes, front);
+        restackToEnd(textFields, selectedTextFields, front);
+        for (CanvasImage img : selectedImages) img.behindInk = !front;
+        restackToEnd(images, selectedImages, front);
+        clearSelection();
+        clearDeselectedPending();
+        markSceneDirty();
+        // Drawn now, not in the background: the deselected items would otherwise show
+        // over everything until the redraw lands, in their old layer.
+        if (document.isOpen()) rebuildSceneBackdropNow(backdropSkipSelected());
+        invalidate();
+        notifyContentChanged();
+        return true;
+    }
+
+    /** Moves {@code moving} (kept in its present order) to the end of {@code all}, or the start. */
+    private static <T> void restackToEnd(List<T> all, List<T> moving, boolean end) {
+        if (moving.isEmpty()) return;
+        Set<T> set = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        set.addAll(moving);
+        List<T> picked = new ArrayList<>(moving.size());
+        List<T> rest = new ArrayList<>(all.size());
+        for (T t : all) (set.contains(t) ? picked : rest).add(t);
+        all.clear();
+        if (end) {
+            all.addAll(rest);
+            all.addAll(picked);
+        } else {
+            all.addAll(picked);
+            all.addAll(rest);
+        }
+    }
+
+    /**
+     * Mirrors the selected handwriting and images across the middle of the selection,
+     * left-right ({@code horizontal}) or top-bottom. Text boxes swap places with the
+     * rest but their text still reads normally. One undo step.
+     */
+    public boolean flipSelection(boolean horizontal) {
+        if (!selectionHasInkOrImages()) return false;
+        RectF b = selectionBoundsWorld();
+        if (b == null) return false;
+        recordUndoPoint();
+        float ax2 = b.left + b.right;
+        float ay2 = b.top + b.bottom;
+        for (Stroke st : selectedStrokes) {
+            for (Sample p : st.samples) {
+                if (horizontal) p.x = ax2 - p.x;
+                else p.y = ay2 - p.y;
+            }
+            st.recomputeBounds();
+        }
+        for (CanvasImage img : selectedImages) {
+            synchronized (sharedItemDrawLock) {
+                if (horizontal) img.cx = ax2 - img.cx;
+                else img.cy = ay2 - img.cy;
+                // A placed artifact is a live page; it moves but cannot be mirrored.
+                if (!img.isLive()) {
+                    if (horizontal) img.flipX = !img.flipX;
+                    else img.flipY = !img.flipY;
+                    // A mirror turns a rotation the other way round.
+                    img.rotationDeg = -img.rotationDeg;
+                }
+                img.markDirty();
+            }
+        }
+        for (CanvasTextField tf : selectedTextFields) {
+            if (horizontal) tf.cx = ax2 - tf.cx;
+            else tf.cy = ay2 - tf.cy;
+        }
+        selFrameValid = false;
+        recomputeSelectionFrame();
+        releaseSelDragBitmap();
+        markSceneDirty();
+        invalidate();
+        notifyContentChanged();
+        notifySelectionLayout();
+        return true;
+    }
+
+    // ---- Links and stickers -----------------------------------------------------------
+
+    /** A link chip under the tap: tell the host where it points. */
+    private boolean followLinkAt(float wx, float wy) {
+        for (int i = textFields.size() - 1; i >= 0; i--) {
+            CanvasTextField tf = textFields.get(i);
+            if (!tf.isLink() || !tf.contains(wx, wy)) continue;
+            if (listener != null) listener.onLinkTapped(tf.linkDoc != null ? tf.linkDoc : "", tf.linkPage);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * The selection as a sticker: its handwriting, images and text boxes, moved so the
+     * selection's top-left corner is the origin. Null without a selection.
+     */
+    public org.json.JSONObject selectionAsSticker() throws Exception {
+        RectF b = selectionBoundsWorld();
+        if (b == null || b.isEmpty()) return null;
+        org.json.JSONObject o = new org.json.JSONObject();
+        org.json.JSONArray strokes = new org.json.JSONArray();
+        for (Stroke st : inkStrokes) {
+            if (!selectedStrokes.contains(st)) continue;
+            Stroke d = st.duplicate();
+            d.translate(-b.left, -b.top);
+            strokes.put(strokeToJson(d));
+        }
+        org.json.JSONArray imgs = new org.json.JSONArray();
+        for (CanvasImage img : selectedImages) {
+            if (img.isLive() || img.bitmap == null) continue;
+            org.json.JSONObject j = img.toJson();
+            j.put("cx", img.cx - b.left);
+            j.put("cy", img.cy - b.top);
+            imgs.put(j);
+        }
+        org.json.JSONArray texts = new org.json.JSONArray();
+        for (CanvasTextField tf : selectedTextFields) {
+            CanvasTextField d = tf.duplicate(-b.left, -b.top);
+            texts.put(d.toJson());
+        }
+        o.put("strokes", strokes);
+        o.put("images", imgs);
+        o.put("texts", texts);
+        o.put("w", b.width());
+        o.put("h", b.height());
+        return o;
+    }
+
+    /** A picture of the selection alone on a clear background, for the sticker library. */
+    public Bitmap renderSelectionThumbnail(int maxPx) {
+        RectF b = selectionBoundsWorld();
+        if (b == null || b.isEmpty()) return null;
+        float pad = Math.max(b.width(), b.height()) * 0.06f;
+        RectF r = new RectF(b);
+        r.inset(-pad, -pad);
+        float scale = maxPx / Math.max(r.width(), r.height());
+        int w = Math.max(1, Math.round(r.width() * scale));
+        int h = Math.max(1, Math.round(r.height() * scale));
+        Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bmp);
+        c.scale(scale, scale);
+        c.translate(-r.left, -r.top);
+        Paint ink = new Paint(Paint.ANTI_ALIAS_FLAG);
+        Path scratch = new Path();
+        for (Stroke st : inkStrokes) {
+            if (selectedStrokes.contains(st)) drawStroke(c, st, ink, scratch);
+        }
+        for (CanvasImage img : selectedImages) {
+            if (!img.isLive()) img.draw(c, imagePaint);
+        }
+        for (CanvasTextField tf : selectedTextFields) tf.draw(c, false);
+        return bmp;
+    }
+
+    /** Places a sticker centred on a world point, selected so it can be moved straight away. */
+    public void placeStickerAt(org.json.JSONObject sticker, float cx, float cy) throws Exception {
+        if (sticker == null) return;
+        float ox = cx - (float) sticker.optDouble("w", 0) * 0.5f;
+        float oy = cy - (float) sticker.optDouble("h", 0) * 0.5f;
+        recordUndoPoint();
+        clearSelection();
+        org.json.JSONArray strokes = sticker.optJSONArray("strokes");
+        if (strokes != null) {
+            for (int i = 0; i < strokes.length(); i++) {
+                Stroke st = strokeFromJson(strokes.getJSONObject(i));
+                st.translate(ox, oy);
+                st.recomputeBounds();
+                inkStrokes.add(st);
+                selectedStrokes.add(st);
+            }
+        }
+        org.json.JSONArray imgs = sticker.optJSONArray("images");
+        if (imgs != null) {
+            for (int i = 0; i < imgs.length(); i++) {
+                CanvasImage img = CanvasImage.fromJson(imgs.getJSONObject(i));
+                if (img == null) continue;
+                img.setCenter(img.cx + ox, img.cy + oy);
+                images.add(img);
+                selectedImages.add(img);
+            }
+        }
+        org.json.JSONArray texts = sticker.optJSONArray("texts");
+        if (texts != null) {
+            for (int i = 0; i < texts.length(); i++) {
+                CanvasTextField tf = CanvasTextField.fromJson(texts.getJSONObject(i));
+                tf.id = java.util.UUID.randomUUID().toString();
+                tf.cx += ox;
+                tf.cy += oy;
+                textFields.add(tf);
+                selectedTextFields.add(tf);
+                maybeRequestLatexRender(tf);
+            }
+        }
+        selFrameValid = false;
+        recomputeSelectionFrame();
+        markSceneDirty();
+        notifySelectionChanged();
+        notifySelectionLayout();
+        notifyContentChanged();
+        invalidate();
+    }
+
     public boolean hasActiveSelection() {
         return hasSelection();
     }
@@ -3159,8 +3727,7 @@ public class CodeCanvasView extends View {
         for (CanvasImage img : new ArrayList<>(selectedImages)) {
             if (img.bitmap == null || img.bitmap.isRecycled()) continue;
             CanvasImage dup = new CanvasImage(img.bitmap, img.cx + ox, img.cy + oy, img.width, img.height);
-            dup.presentHidden = img.presentHidden;
-            dup.rotationDeg = img.rotationDeg;
+            img.copyLookTo(dup);
             images.add(dup);
             newImages.add(dup);
         }
@@ -3221,8 +3788,7 @@ public class CodeCanvasView extends View {
         for (CanvasImage img : selectedImages) {
             if (img.bitmap == null || img.bitmap.isRecycled()) continue;
             CanvasImage dup = new CanvasImage(img.bitmap, img.cx, img.cy, img.width, img.height);
-            dup.presentHidden = img.presentHidden;
-            dup.rotationDeg = img.rotationDeg;
+            img.copyLookTo(dup);
             clipImages.add(dup);
             RectF b = dup.bounds();
             if (union == null) union = new RectF(b);
@@ -3266,8 +3832,7 @@ public class CodeCanvasView extends View {
         for (CanvasImage img : clipImages) {
             if (img.bitmap == null || img.bitmap.isRecycled()) continue;
             CanvasImage dup = new CanvasImage(img.bitmap, img.cx + dx, img.cy + dy, img.width, img.height);
-            dup.presentHidden = img.presentHidden;
-            dup.rotationDeg = img.rotationDeg;
+            img.copyLookTo(dup);
             images.add(dup);
             selectedImages.add(dup);
         }
@@ -3404,7 +3969,7 @@ public class CodeCanvasView extends View {
         float bh = bmp.getHeight();
         float scale = 1f;
         float maxDim = Math.max(bw, bh);
-        if (maxDim > MAX_IMAGE_WORLD) scale = MAX_IMAGE_WORLD / maxDim;
+        if (maxDim > MAX_PASTED_IMAGE_WORLD) scale = MAX_PASTED_IMAGE_WORLD / maxDim;
         float w = bw * scale;
         float h = bh * scale;
         CanvasImage img = new CanvasImage(bmp, worldX, worldY, w, h);
@@ -3968,8 +4533,24 @@ public class CodeCanvasView extends View {
         o.put("packed", packSamples(s.samples));
         if (s.brush != BRUSH_INK) o.put("brush", BRUSH_KEYS[s.brush]);
         if (s.presentHidden) o.put("presentHidden", true);
+        putStrokeExtras(s, o);
         s.json = o;
         return o;
+    }
+
+    /** What tape and shapes carry beyond the samples: the shape, its fill, a lifted tape. */
+    private static void putStrokeExtras(Stroke s, org.json.JSONObject o) throws Exception {
+        if (s.brush == BRUSH_SHAPE) {
+            o.put("shape", s.shape);
+            if (s.fill != 0) o.put("fill", s.fill);
+        }
+        if (s.brush == BRUSH_TAPE && s.revealed) o.put("revealed", true);
+    }
+
+    private static void readStrokeExtras(Stroke s, org.json.JSONObject o) {
+        s.shape = ShapeLibrary.clamp(o.optInt("shape", 0));
+        s.fill = o.optInt("fill", 0);
+        s.revealed = o.optBoolean("revealed", false);
     }
 
     /**
@@ -4029,6 +4610,7 @@ public class CodeCanvasView extends View {
         Stroke s = new Stroke(o.optInt("color", 0xFF4C8DFF), o.optString("colorName", "blue"));
         s.brush = brushFromKey(o.optString("brush", ""));
         s.presentHidden = o.optBoolean("presentHidden", false);
+        readStrokeExtras(s, o);
         // Glow strokes from before there were several effect brushes.
         if (s.brush == BRUSH_INK && o.optBoolean("glow", false)) s.brush = BRUSH_GLOW;
         String packed = o.optString("packed", "");
@@ -4615,18 +5197,35 @@ public class CodeCanvasView extends View {
         sceneBackdropOmitsSelection = navRebuildSkipSelected;
         // Requested after the deselect (it bumps the generation), so it has them.
         clearDeselectedPending();
-        if (!strokesAfterRebuild.isEmpty()) {
-            // Finished after this redraw started: still drawn live, and redrawn next.
-            deselectedStrokes.addAll(strokesAfterRebuild);
-            strokesAfterRebuild.clear();
-            sceneBackdropDirty = true;
-            navFreezeFullDirty = true;
-            post(warmBackdropRunnable);
-        }
         releaseBackdropHw();
         if (hw != null) {
             sceneBackdropHw = hw;
             sceneBackdropHwFor = result;
+        }
+        if (!strokesAfterRebuild.isEmpty()) {
+            // Finished after this redraw started. If it sits exactly at the camera and
+            // nothing else changed meanwhile, stamp them in like any finished stroke.
+            // Redrawing everything again instead chained full redraws back to back for
+            // as long as the pen kept writing — on a page full of handwriting each took
+            // long enough that another stroke always finished during it, and the
+            // redraw threads fought the pen for the CPU the whole time.
+            boolean onlyStrokesMissing = freezeMatrix.equals(viewMatrix)
+                    && !navSnapshotActive
+                    && !pendingPdfReady
+                    && sceneBackdropOmitsSelection == backdropSkipSelected()
+                    && !(document.isOpen() && document.hasLandedPages());
+            if (onlyStrokesMissing) {
+                for (Stroke s : strokesAfterRebuild) {
+                    if (inkStrokes.contains(s)) stampStrokeIntoBackdrop(s);
+                }
+            } else {
+                // Still drawn live, and redrawn next.
+                deselectedStrokes.addAll(strokesAfterRebuild);
+                sceneBackdropDirty = true;
+                navFreezeFullDirty = true;
+                post(warmBackdropRunnable);
+            }
+            strokesAfterRebuild.clear();
         }
         if (navSnapshotActive) {
             navStartViewMatrix.set(freezeMatrix);
@@ -5075,6 +5674,12 @@ public class CodeCanvasView extends View {
             colorName = s.colorName;
             presentHidden = s.presentHidden;
             int n = s.samples.size();
+            if (s.snapXs != null && s.snapXs.length == n) {
+                xs = s.snapXs;
+                ys = s.snapYs;
+                ws = s.snapWs;
+                return;
+            }
             xs = new float[n];
             ys = new float[n];
             ws = new float[n];
@@ -5084,6 +5689,9 @@ public class CodeCanvasView extends View {
                 ys[i] = p.y;
                 ws[i] = p.width;
             }
+            s.snapXs = xs;
+            s.snapYs = ys;
+            s.snapWs = ws;
         }
 
         void restore() {
@@ -5105,15 +5713,24 @@ public class CodeCanvasView extends View {
                 }
             }
             stroke.recomputeBounds();
+            // The stroke now holds exactly these samples: later snapshots can share them.
+            stroke.snapXs = xs;
+            stroke.snapYs = ys;
+            stroke.snapWs = ws;
         }
     }
 
     private static final class ImgSnap {
+        static final int FLIP_X = 1, FLIP_Y = 2, BEHIND_INK = 4;
+
         final CanvasImage img;
         final float cx, cy, w, h, rot;
         final boolean presentHidden;
+        /** {@link #FLIP_X}, {@link #FLIP_Y}, {@link #BEHIND_INK}. */
+        final int flags;
 
-        ImgSnap(CanvasImage i, float cx, float cy, float w, float h, float rot, boolean hidden) {
+        ImgSnap(CanvasImage i, float cx, float cy, float w, float h, float rot, boolean hidden,
+                int flags) {
             img = i;
             this.cx = cx;
             this.cy = cy;
@@ -5121,6 +5738,7 @@ public class CodeCanvasView extends View {
             this.h = h;
             this.rot = rot;
             presentHidden = hidden;
+            this.flags = flags;
         }
 
         ImgSnap(CanvasImage i) {
@@ -5131,6 +5749,8 @@ public class CodeCanvasView extends View {
             w = i.width;
             h = i.height;
             rot = i.rotationDeg;
+            flags = (i.flipX ? FLIP_X : 0) | (i.flipY ? FLIP_Y : 0)
+                    | (i.behindInk ? BEHIND_INK : 0);
         }
 
         void restore() {
@@ -5140,6 +5760,9 @@ public class CodeCanvasView extends View {
             img.height = h;
             img.rotationDeg = rot;
             img.presentHidden = presentHidden;
+            img.flipX = (flags & FLIP_X) != 0;
+            img.flipY = (flags & FLIP_Y) != 0;
+            img.behindInk = (flags & BEHIND_INK) != 0;
             img.markDirty();
         }
     }
@@ -5218,7 +5841,8 @@ public class CodeCanvasView extends View {
         if (!document.isOpen()) return out;
         List<Stroke> cand = new ArrayList<>();
         for (Stroke st : inkStrokes) {
-            if (st.brush == BRUSH_HIGHLIGHTER || st.samples.isEmpty() || st.bounds.isEmpty()) continue;
+            if (st.brush == BRUSH_HIGHLIGHTER || isDraggedBrush(st.brush)
+                    || st.samples.isEmpty() || st.bounds.isEmpty()) continue;
             cand.add(st);
         }
         if (cand.isEmpty()) return out;
@@ -5347,6 +5971,8 @@ public class CodeCanvasView extends View {
         final List<ContentSnap> redo = new ArrayList<>();
         final java.util.IdentityHashMap<Stroke, Integer> strokeIds = new java.util.IdentityHashMap<>();
         final List<Integer> strokeBrush = new ArrayList<>();
+        /** Tape and shape properties per stroke id (null for other brushes). */
+        final List<org.json.JSONObject> strokeExtras = new ArrayList<>();
         final int currentStrokes;
         final java.util.IdentityHashMap<CanvasImage, Integer> imageIds = new java.util.IdentityHashMap<>();
         /** Per image id: its JSON if it is not in the document (deleted, only in history). */
@@ -5387,6 +6013,15 @@ public class CodeCanvasView extends View {
             if (strokeIds.containsKey(s)) return;
             strokeIds.put(s, strokeIds.size());
             strokeBrush.add(s.brush);
+            org.json.JSONObject x = null;
+            if (isDraggedBrush(s.brush)) {
+                x = new org.json.JSONObject();
+                try {
+                    putStrokeExtras(s, x);
+                } catch (Exception ignored) {
+                }
+            }
+            strokeExtras.add(x);
         }
 
         private void imageId(CanvasImage img, boolean historyOnly) throws Exception {
@@ -5409,6 +6044,9 @@ public class CodeCanvasView extends View {
             org.json.JSONArray brushes = new org.json.JSONArray();
             for (int b : strokeBrush) brushes.put(b);
             o.put("strokes", brushes);
+            org.json.JSONArray extras = new org.json.JSONArray();
+            for (org.json.JSONObject x : strokeExtras) extras.put(x != null ? x : org.json.JSONObject.NULL);
+            o.put("strokeExtras", extras);
             o.put("curStrokes", currentStrokes);
             o.put("images", jsonList(imageJson));
             o.put("curImages", currentImages);
@@ -5418,6 +6056,7 @@ public class CodeCanvasView extends View {
             // Each distinct (stroke, shape, colour) once; steps list indices into it.
             org.json.JSONArray states = new org.json.JSONArray();
             java.util.HashMap<Long, List<Integer>> byHash = new java.util.HashMap<>();
+            java.util.IdentityHashMap<float[], List<Integer>> byArray = new java.util.IdentityHashMap<>();
             List<StrokeSnap> reps = new ArrayList<>();
             org.json.JSONArray undoJson = new org.json.JSONArray();
             org.json.JSONArray redoJson = new org.json.JSONArray();
@@ -5427,7 +6066,7 @@ public class CodeCanvasView extends View {
                 for (ContentSnap snap : list) {
                     int[] ids = new int[snap.strokes.size()];
                     for (int k = 0; k < ids.length; k++) {
-                        ids[k] = stateId(snap.strokes.get(k), states, byHash, reps);
+                        ids[k] = stateId(snap.strokes.get(k), states, byHash, byArray, reps);
                     }
                     org.json.JSONObject sj = new org.json.JSONObject();
                     sj.put("full", snap.full);
@@ -5436,7 +6075,7 @@ public class CodeCanvasView extends View {
                     for (ImgSnap is : snap.images) {
                         im.put(new org.json.JSONArray().put(imageIds.get(is.img))
                                 .put(is.cx).put(is.cy).put(is.w).put(is.h).put(is.rot)
-                                .put(is.presentHidden));
+                                .put(is.presentHidden).put(is.flags));
                     }
                     sj.put("i", im);
                     org.json.JSONArray tx = new org.json.JSONArray();
@@ -5457,8 +6096,34 @@ public class CodeCanvasView extends View {
 
         private int stateId(StrokeSnap ss, org.json.JSONArray states,
                             java.util.HashMap<Long, List<Integer>> byHash,
+                            java.util.IdentityHashMap<float[], List<Integer>> byArray,
                             List<StrokeSnap> reps) throws Exception {
             int obj = strokeIds.get(ss.stroke);
+            // Snapshots of an unchanged stroke share its arrays: match those by identity
+            // instead of hashing every sample of every snapshot.
+            List<Integer> same = byArray.get(ss.xs);
+            if (same != null) {
+                for (int id : same) {
+                    StrokeSnap r = reps.get(id);
+                    if (r.stroke == ss.stroke && r.ys == ss.ys && r.ws == ss.ws
+                            && r.color == ss.color && r.presentHidden == ss.presentHidden
+                            && java.util.Objects.equals(r.colorName, ss.colorName)) {
+                        return id;
+                    }
+                }
+            }
+            int id = stateIdByContent(ss, obj, states, byHash, reps);
+            if (same == null) {
+                same = new ArrayList<>(1);
+                byArray.put(ss.xs, same);
+            }
+            if (!same.contains(id)) same.add(id);
+            return id;
+        }
+
+        private int stateIdByContent(StrokeSnap ss, int obj, org.json.JSONArray states,
+                                     java.util.HashMap<Long, List<Integer>> byHash,
+                                     List<StrokeSnap> reps) throws Exception {
             long h = obj;
             h = h * 31 + java.util.Arrays.hashCode(ss.xs);
             h = h * 31 + java.util.Arrays.hashCode(ss.ys);
@@ -5595,6 +6260,9 @@ public class CodeCanvasView extends View {
                 } else {
                     strokes[i] = new Stroke(0xFF000000, "");
                     strokes[i].brush = brushes.getInt(i);
+                    org.json.JSONArray extras = o.optJSONArray("strokeExtras");
+                    org.json.JSONObject x = extras != null ? extras.optJSONObject(i) : null;
+                    if (x != null) readStrokeExtras(strokes[i], x);
                 }
             }
             CanvasImage[] imgs = restoreObjects(o.getJSONArray("images"), o.getInt("curImages"),
@@ -5672,7 +6340,7 @@ public class CodeCanvasView extends View {
                 if (img == null) continue;
                 snap.images.add(new ImgSnap(img, (float) e.getDouble(1), (float) e.getDouble(2),
                         (float) e.getDouble(3), (float) e.getDouble(4), (float) e.getDouble(5),
-                        e.getBoolean(6)));
+                        e.getBoolean(6), e.optInt(7, 0)));
             }
             org.json.JSONArray tx = sj.getJSONArray("t");
             for (int k = 0; k < tx.length(); k++) {
@@ -5965,14 +6633,28 @@ public class CodeCanvasView extends View {
     static final int BRUSH_CALLIGRAPHY = 4;
     static final int BRUSH_SPRAY = 5;
     static final int BRUSH_SPARKLE = 6;
-    static final int BRUSH_COUNT = 7;
+    /** Masking tape laid over content; a tap lifts it to show what is underneath. */
+    static final int BRUSH_TAPE = 7;
+    /** A ready-made shape ({@link ShapeLibrary}) with a fill and a border. */
+    static final int BRUSH_SHAPE = 8;
+    static final int BRUSH_COUNT = 9;
     /** Saved names; the index is the brush. */
     static final String[] BRUSH_KEYS = {
-            "ink", "glow", "rainbow", "highlighter", "calligraphy", "spray", "sparkle"
+            "ink", "glow", "rainbow", "highlighter", "calligraphy", "spray", "sparkle", "tape", "shape"
     };
     static final String[] BRUSH_LABELS = {
-            "Ink", "Glow", "Rainbow", "Highlighter", "Calligraphy", "Spray", "Sparkle"
+            "Ink", "Glow", "Rainbow", "Highlighter", "Calligraphy", "Spray", "Sparkle", "Tape", "Shape"
     };
+
+    /** Brushes the pen menu offers; the others are tools of their own or retired. */
+    static boolean isPenBrush(int b) {
+        return b != BRUSH_HIGHLIGHTER && b != BRUSH_CALLIGRAPHY && b != BRUSH_TAPE && b != BRUSH_SHAPE;
+    }
+
+    /** Dragged out start to end instead of traced: tape and shapes. */
+    static boolean isDraggedBrush(int b) {
+        return b == BRUSH_TAPE || b == BRUSH_SHAPE;
+    }
 
     static int brushFromKey(String key) {
         for (int i = 0; i < BRUSH_KEYS.length; i++) {
@@ -5989,6 +6671,7 @@ public class CodeCanvasView extends View {
             case BRUSH_SPRAY: return 6.5f;
             case BRUSH_HIGHLIGHTER: return 3.4f;
             case BRUSH_CALLIGRAPHY: return 2.0f;
+            case BRUSH_TAPE: return 1.15f;
             default: return 1f;
         }
     }
@@ -6035,6 +6718,8 @@ public class CodeCanvasView extends View {
             case BRUSH_CALLIGRAPHY: drawCalligraphyStroke(canvas, s, ink, live); break;
             case BRUSH_SPRAY: drawSprayStroke(canvas, s, ink, live); break;
             case BRUSH_SPARKLE: drawSparkleStroke(canvas, s, ink, live); break;
+            case BRUSH_TAPE: drawTapeStroke(canvas, s, ink, live); break;
+            case BRUSH_SHAPE: drawShapeStroke(canvas, s, ink, live); break;
             default: drawStrokeSegments(canvas, s, ink, strokeDrawPath); break;
         }
     }
@@ -6175,22 +6860,398 @@ public class CodeCanvasView extends View {
         }
     }
 
-    // Highlighter: wide, translucent, flat-ended — one path, so overlaps do not darken.
+    /**
+     * Set while annotations are drawn for PDF export: PDF pages cannot blend, so the
+     * highlighter falls back to plain translucent ink there.
+     */
+    private static final ThreadLocal<Boolean> plainHighlighter = ThreadLocal.withInitial(() -> false);
+
+    /** The highlighter's chisel: this much taller than the pen width, and this thick across. */
+    private static final float HIGHLIGHT_NIB_H = 3.2f;
+    private static final float HIGHLIGHT_NIB_W = 0.28f;
+
+    /**
+     * Highlighter: a flat chisel nib held upright, swept along the stroke — flat ends,
+     * even width, no round tip. It is one filled shape, so its own overlaps do not
+     * darken, and it is blended into what lies under it instead of painted over it:
+     * multiplied on light paper (black text stays black), screened on dark paper
+     * (light text stays light). Only the colour of the page under it changes.
+     */
     private void drawHighlighterStroke(Canvas canvas, Stroke s, Paint ink, boolean live) {
         List<Sample> pts = s.samples;
         if (pts.isEmpty()) return;
         StrokeGeom g = effectGeom(s, live);
-        if (g == null || g.paths.length != 1) {
-            g = new StrokeGeom(new Path[]{buildGlowPath(pts, strokeFollow)},
-                    new float[]{averageWidth(pts)}, strokeGeomVersion);
+        if (g == null || g.fill == null) {
+            float h = averageWidth(pts) * HIGHLIGHT_NIB_H * 0.5f;
+            float w = Math.max(0.5f, h * 2f * HIGHLIGHT_NIB_W * 0.5f);
+            Path fill = new Path();
+            fill.setFillType(Path.FillType.WINDING);
+            float[] hull = new float[16];
+            Sample prev = null;
+            for (Sample b : pts) {
+                if (prev == null) {
+                    fill.addRect(b.x - w, b.y - h, b.x + w, b.y + h, Path.Direction.CW);
+                } else if (prev.x != b.x || prev.y != b.y) {
+                    addNibSweep(fill, prev.x, prev.y, b.x, b.y, w, h, hull);
+                }
+                prev = b;
+            }
+            g = new StrokeGeom(new Path[0], new float[]{averageWidth(pts)}, strokeGeomVersion);
+            g.fill = fill;
             if (!live) s.geom = g;
         }
+        boolean plain = plainHighlighter.get();
+        int paper = document.isOpen() ? pagePaperColor : sceneBgColor;
+        boolean darkPaper = luminance(paper) < 0.45f;
+        ink.setStyle(Paint.Style.FILL);
+        if (plain) {
+            ink.setColor(argb(Math.round(((s.color >>> 24) & 0xFF) * 0.38f), s.color));
+        } else if (darkPaper) {
+            ink.setColor(mix(s.color, 0xFF000000, 0.25f));
+            ink.setAlpha(150);
+            ink.setBlendMode(android.graphics.BlendMode.SCREEN);
+        } else {
+            // A lighter tint, the way highlighter ink is a pale version of its colour.
+            ink.setColor(mix(s.color, 0xFFFFFFFF, 0.35f));
+            ink.setAlpha(225);
+            ink.setBlendMode(android.graphics.BlendMode.MULTIPLY);
+        }
+        canvas.drawPath(g.fill, ink);
+        ink.setBlendMode(null);
         ink.setStyle(Paint.Style.STROKE);
-        ink.setStrokeCap(Paint.Cap.BUTT);
-        ink.setStrokeJoin(Paint.Join.ROUND);
-        ink.setStrokeWidth(g.widths[0] * 3.2f);
-        ink.setColor(argb(Math.round(((s.color >>> 24) & 0xFF) * 0.38f), s.color));
-        canvas.drawPath(g.paths[0], ink);
+    }
+
+    /** The area an upright w×h nib (half sizes) sweeps from (ax,ay) to (bx,by): a hexagon. */
+    private static void addNibSweep(Path out, float ax, float ay, float bx, float by,
+                                    float w, float h, float[] pts) {
+        // The 8 corners of the nib at both ends; their convex hull is the swept area.
+        float[] cx = {-w, w, w, -w};
+        float[] cy = {-h, -h, h, h};
+        for (int i = 0; i < 4; i++) {
+            pts[i * 2] = ax + cx[i];
+            pts[i * 2 + 1] = ay + cy[i];
+            pts[8 + i * 2] = bx + cx[i];
+            pts[8 + i * 2 + 1] = by + cy[i];
+        }
+        convexHullInto(out, pts, 8);
+    }
+
+    /** Monotone-chain convex hull of {@code n} points (x,y pairs), added as one closed polygon. */
+    private static void convexHullInto(Path out, float[] p, int n) {
+        Integer[] idx = new Integer[n];
+        for (int i = 0; i < n; i++) idx[i] = i;
+        java.util.Arrays.sort(idx, (a, b) -> p[a * 2] != p[b * 2]
+                ? Float.compare(p[a * 2], p[b * 2]) : Float.compare(p[a * 2 + 1], p[b * 2 + 1]));
+        int[] hull = new int[2 * n];
+        int k = 0;
+        for (int t = 0; t < n; t++) {
+            int i = idx[t];
+            while (k >= 2 && cross(p, hull[k - 2], hull[k - 1], i) <= 0) k--;
+            hull[k++] = i;
+        }
+        for (int t = n - 2, lower = k + 1; t >= 0; t--) {
+            int i = idx[t];
+            while (k >= lower && cross(p, hull[k - 2], hull[k - 1], i) <= 0) k--;
+            hull[k++] = i;
+        }
+        k--;  // last point repeats the first
+        if (k < 3) return;
+        out.moveTo(p[hull[0] * 2], p[hull[0] * 2 + 1]);
+        for (int i = 1; i < k; i++) out.lineTo(p[hull[i] * 2], p[hull[i] * 2 + 1]);
+        out.close();
+    }
+
+    private static float cross(float[] p, int o, int a, int b) {
+        return (p[a * 2] - p[o * 2]) * (p[b * 2 + 1] - p[o * 2 + 1])
+                - (p[a * 2 + 1] - p[o * 2 + 1]) * (p[b * 2] - p[o * 2]);
+    }
+
+    private static float luminance(int c) {
+        return (0.299f * ((c >> 16) & 0xFF) + 0.587f * ((c >> 8) & 0xFF) + 0.114f * (c & 0xFF)) / 255f;
+    }
+
+    /** {@code a} moved {@code t} of the way to {@code b}, keeping {@code a}'s alpha. */
+    private static int mix(int a, int b, float t) {
+        int r = Math.round(((a >> 16) & 0xFF) + (((b >> 16) & 0xFF) - ((a >> 16) & 0xFF)) * t);
+        int g = Math.round(((a >> 8) & 0xFF) + (((b >> 8) & 0xFF) - ((a >> 8) & 0xFF)) * t);
+        int bl = Math.round((a & 0xFF) + ((b & 0xFF) - (a & 0xFF)) * t);
+        return (a & 0xFF000000) | (r << 16) | (g << 8) | bl;
+    }
+
+    // ---- Tape and shapes -------------------------------------------------------------
+
+    /** Tape height per unit of pen size. */
+    private static final float TAPE_HEIGHT_PER_PX = 6f;
+    /** A tap with the shape tool places one this big on screen. */
+    private static final float DEFAULT_SHAPE_PX = 140f;
+
+    private int shapeKind = ShapeLibrary.RECTANGLE;
+    private int shapeFill = 0;
+    private int shapeBorderColor = 0xFF4C8DFF;
+    private float shapeBorderWidth = 3f;
+
+    /** What the shape tool draws next: which shape, fill (0 = none), border colour and width. */
+    public void setShapeStyle(int kind, int fill, int borderColor, float borderWidth) {
+        shapeKind = ShapeLibrary.clamp(kind);
+        shapeFill = fill;
+        shapeBorderColor = borderColor;
+        shapeBorderWidth = Math.max(0f, Math.min(40f, borderWidth));
+    }
+
+    /**
+     * Tape: a straight strip from where the pen went down to where it lifted, its ends
+     * torn. It covers whatever is under it; lifted ({@link Stroke#revealed}) it shrinks to
+     * a faint tint and a dashed edge so the content shows and the tape can be found again.
+     */
+    private void drawTapeStroke(Canvas canvas, Stroke s, Paint ink, boolean live) {
+        List<Sample> pts = s.samples;
+        if (pts.isEmpty()) return;
+        StrokeGeom g = effectGeom(s, live);
+        if (g == null || g.fill == null) {
+            g = new StrokeGeom(new Path[0], new float[]{pts.get(0).width}, strokeGeomVersion);
+            g.fill = tapePath(pts.get(0), pts.get(pts.size() - 1));
+            if (!live) s.geom = g;
+        }
+        float h = pts.get(0).width;
+        ink.setStyle(Paint.Style.FILL);
+        if (s.revealed) {
+            ink.setColor(argb(34, s.color));
+            canvas.drawPath(g.fill, ink);
+            ink.setStyle(Paint.Style.STROKE);
+            ink.setStrokeWidth(Math.max(0.6f, h * 0.035f));
+            ink.setColor(argb(150, s.color));
+            ink.setPathEffect(new android.graphics.DashPathEffect(new float[]{h * 0.14f, h * 0.1f}, 0f));
+            canvas.drawPath(g.fill, ink);
+            ink.setPathEffect(null);
+            return;
+        }
+        ink.setColor(s.color | 0xFF000000);
+        canvas.drawPath(g.fill, ink);
+        // A sheen along the middle and darker edges, so it reads as tape, not a box.
+        ink.setStyle(Paint.Style.STROKE);
+        ink.setStrokeWidth(Math.max(0.6f, h * 0.05f));
+        ink.setColor(argb(40, 0x000000));
+        canvas.drawPath(g.fill, ink);
+        ink.setStyle(Paint.Style.FILL);
+    }
+
+    /** The tape's outline between two points, ends torn in a zigzag. */
+    private static Path tapePath(Sample a, Sample b) {
+        float h = a.width;
+        float hh = h * 0.5f;
+        float dx = b.x - a.x, dy = b.y - a.y;
+        float len = (float) Math.hypot(dx, dy);
+        float ux, uy;
+        if (len < 1e-3f) {
+            ux = 1f;
+            uy = 0f;
+            len = h;
+        } else {
+            ux = dx / len;
+            uy = dy / len;
+        }
+        float bx = a.x + ux * len, by = a.y + uy * len;
+        float nx = -uy, ny = ux;
+        float tooth = h * 0.07f;
+        int teeth = 6;
+        Path p = new Path();
+        p.moveTo(a.x + nx * hh, a.y + ny * hh);
+        p.lineTo(bx + nx * hh, by + ny * hh);
+        for (int k = 1; k < teeth; k++) {
+            float off = hh - k * h / teeth;
+            float along = (k % 2 == 1) ? tooth : 0f;
+            p.lineTo(bx + nx * off + ux * along, by + ny * off + uy * along);
+        }
+        p.lineTo(bx - nx * hh, by - ny * hh);
+        p.lineTo(a.x - nx * hh, a.y - ny * hh);
+        for (int k = 1; k < teeth; k++) {
+            float off = -hh + k * h / teeth;
+            float along = (k % 2 == 1) ? -tooth : 0f;
+            p.lineTo(a.x + nx * off + ux * along, a.y + ny * off + uy * along);
+        }
+        p.close();
+        return p;
+    }
+
+    private static boolean tapeContains(Stroke s, float x, float y, float r) {
+        if (s.samples.isEmpty()) return false;
+        Sample a = s.samples.get(0), b = s.samples.get(s.samples.size() - 1);
+        float h = a.width;
+        float dx = b.x - a.x, dy = b.y - a.y;
+        float len = (float) Math.hypot(dx, dy);
+        if (len < 1e-3f) {
+            dx = 1f;
+            dy = 0f;
+            len = h;
+        } else {
+            dx /= len;
+            dy /= len;
+        }
+        float px = x - a.x, py = y - a.y;
+        float along = px * dx + py * dy;
+        float across = Math.abs(-px * dy + py * dx);
+        return along >= -r - h * 0.07f && along <= len + r + h * 0.07f && across <= h * 0.5f + r;
+    }
+
+    /** The unit square → the shape's frame: corners A, B (A + width) and C (A + height). */
+    private static boolean shapeFrame(Stroke s, boolean live, Matrix out) {
+        List<Sample> pts = s.samples;
+        if (pts.isEmpty()) return false;
+        float ax, ay, bx, by, cx, cy;
+        if (live || pts.size() < 3) {
+            Sample a = pts.get(0), e = pts.get(pts.size() - 1);
+            ax = a.x;
+            ay = a.y;
+            bx = e.x;
+            by = a.y;
+            cx = a.x;
+            cy = e.y;
+        } else {
+            ax = pts.get(0).x;
+            ay = pts.get(0).y;
+            bx = pts.get(1).x;
+            by = pts.get(1).y;
+            cx = pts.get(2).x;
+            cy = pts.get(2).y;
+        }
+        float[] src = {0f, 0f, 1f, 0f, 0f, 1f};
+        float[] dst = {ax, ay, bx, by, cx, cy};
+        return out.setPolyToPoly(src, 0, dst, 0, 3);
+    }
+
+    /**
+     * A shape: the library's outline mapped onto the stroke's frame (so it turns, scales
+     * and mirrors with a selection), filled with {@link Stroke#fill} and outlined in its
+     * colour at the samples' width. Open shapes (lines) are only outlined.
+     */
+    private void drawShapeStroke(Canvas canvas, Stroke s, Paint ink, boolean live) {
+        StrokeGeom g = effectGeom(s, live);
+        if (g == null || g.fill == null) {
+            Matrix m = new Matrix();
+            if (!shapeFrame(s, live, m)) return;
+            Path path = ShapeLibrary.unitPath(s.shape);
+            path.transform(m);
+            g = new StrokeGeom(new Path[0], new float[]{s.samples.get(0).width}, strokeGeomVersion);
+            g.fill = path;
+            if (!live) s.geom = g;
+        }
+        boolean open = ShapeLibrary.isOpen(s.shape);
+        if (!open && (s.fill >>> 24) != 0) {
+            ink.setStyle(Paint.Style.FILL);
+            ink.setColor(s.fill);
+            canvas.drawPath(g.fill, ink);
+        }
+        float w = s.samples.get(0).width;
+        if (w > 0.01f && (s.color >>> 24) != 0) {
+            ink.setStyle(Paint.Style.STROKE);
+            ink.setStrokeJoin(Paint.Join.ROUND);
+            ink.setStrokeCap(Paint.Cap.ROUND);
+            ink.setStrokeWidth(w);
+            ink.setColor(s.color);
+            canvas.drawPath(g.fill, ink);
+        } else if (open) {
+            // A line without a border would be invisible: give it a hairline.
+            ink.setStyle(Paint.Style.STROKE);
+            ink.setStrokeWidth(1f);
+            ink.setColor(s.fill != 0 ? s.fill : s.color | 0xFF000000);
+            canvas.drawPath(g.fill, ink);
+        }
+        ink.setStyle(Paint.Style.STROKE);
+    }
+
+    private static boolean shapeFrameContains(Stroke s, float x, float y, float r) {
+        Matrix m = new Matrix();
+        if (!shapeFrame(s, false, m)) return false;
+        Matrix inv = new Matrix();
+        if (!m.invert(inv)) return false;
+        float[] pt = {x, y};
+        inv.mapPoints(pt);
+        // The radius as a share of the frame's size, roughly.
+        float size = Math.max(1f, Math.max(s.bounds.width(), s.bounds.height()));
+        float slack = (r + (s.samples.isEmpty() ? 0f : s.samples.get(0).width * 0.5f)) / size;
+        return pt[0] >= -slack && pt[0] <= 1f + slack && pt[1] >= -slack && pt[1] <= 1f + slack;
+    }
+
+    /** Lifts (or lays back) the topmost tape under a point. */
+    private boolean toggleTapeAt(float wx, float wy) {
+        for (int i = inkStrokes.size() - 1; i >= 0; i--) {
+            Stroke st = inkStrokes.get(i);
+            if (st.brush != BRUSH_TAPE || !st.hit(wx, wy, 0f)) continue;
+            st.revealed = !st.revealed;
+            st.json = null;
+            markSceneDirty();
+            invalidate();
+            notifyContentChanged();
+            return true;
+        }
+        return false;
+    }
+
+    /** True when a tape lies over {@code r}: ink stamped there would land on top of it. */
+    private boolean tapeOver(RectF r) {
+        for (Stroke st : inkStrokes) {
+            if (st.brush == BRUSH_TAPE && RectF.intersects(st.bounds, r)) return true;
+        }
+        return false;
+    }
+
+    /** Where the pen went down for a tape or shape, on screen, to tell a tap from a drag. */
+    private float dragDownX, dragDownY;
+
+    /** Starts a tape or shape at the pen: two samples, start and (moving) end. */
+    private void beginDraggedStroke(Stroke st, float wx, float wy, float sx, float sy) {
+        float width;
+        if (st.brush == BRUSH_SHAPE) {
+            st.color = shapeBorderColor;
+            st.shape = shapeKind;
+            st.fill = shapeFill;
+            width = shapeBorderWidth;
+        } else {
+            width = baseThicknessPx * TAPE_HEIGHT_PER_PX;
+        }
+        st.samples.add(new Sample(wx, wy, width));
+        st.samples.add(new Sample(wx, wy, width));
+        inkHasTip = false;
+        dragDownX = sx;
+        dragDownY = sy;
+    }
+
+    /**
+     * Finishes a dragged tape or shape. A tap with the tape lifts the tape under it
+     * instead (false: nothing to add); a tap with a shape places one of a default size.
+     */
+    private boolean finishDraggedStroke(Stroke st, float sx, float sy) {
+        float moved = (float) Math.hypot(sx - dragDownX, sy - dragDownY);
+        Sample a = st.samples.get(0);
+        Sample e = st.samples.get(st.samples.size() - 1);
+        if (moved < touchSlop) {
+            if (st.brush == BRUSH_TAPE) {
+                toggleTapeAt(a.x, a.y);
+                return false;
+            }
+            float half = DEFAULT_SHAPE_PX * 0.5f / Math.max(0.01f, viewScale());
+            float cx = a.x, cy = a.y;
+            a.x = cx - half;
+            a.y = cy - half;
+            e.x = cx + half;
+            e.y = cy + half;
+        }
+        if (st.brush == BRUSH_SHAPE) {
+            // Frame corners: start, start→end across, start→end down.
+            float w = a.width;
+            List<Sample> frame = new ArrayList<>(3);
+            frame.add(new Sample(a.x, a.y, w));
+            frame.add(new Sample(e.x, a.y, w));
+            frame.add(new Sample(a.x, e.y, w));
+            st.samples.clear();
+            st.samples.addAll(frame);
+        } else {
+            Sample end = new Sample(e.x, e.y, a.width);
+            st.samples.clear();
+            st.samples.add(a);
+            st.samples.add(end);
+        }
+        return true;
     }
 
     /** Calligraphy nib angle: a flat pen held at 40°. */
@@ -7240,14 +8301,111 @@ public class CodeCanvasView extends View {
             }
             return;
         }
-        releaseBackdropHw();  // drawn in place — the GPU copy no longer matches
+        if (s.brush != BRUSH_TAPE && tapeOver(s.bounds)) {
+            // Tape stays on top: stamped in place, this would land over it.
+            deselectedStrokes.add(s);
+            markSceneDirty();
+            return;
+        }
         resetBands();
+        stampStrokeIntoBackdrop(s);
+    }
+
+    /**
+     * Draws a finished stroke into the backdrop in place. The backdrop's GPU copy is
+     * kept and the stroke drawn live over it until a fresh copy is made once the pen
+     * rests. Dropping the copy instead made the render thread re-upload the whole
+     * overscan (~60MB) on the frame after every single stroke.
+     */
+    private void stampStrokeIntoBackdrop(Stroke s) {
+        if (sceneBackdropHw != null && displayBackdrop() == sceneBackdropHw) {
+            strokesOverHw.add(s);
+        }
+        if (hwRefreshInFlight) strokesDuringHwCopy.add(s);
         sceneBackdropCanvas.setBitmap(sceneBackdrop);
         sceneBackdropCanvas.save();
         sceneBackdropCanvas.translate(overscanX, overscanY);
-        sceneBackdropCanvas.concat(viewMatrix);
+        // The camera these pixels were drawn at, which a pending redraw can leave
+        // behind the live one.
+        sceneBackdropCanvas.concat(backdropMatrix);
         drawStroke(sceneBackdropCanvas, s);
         sceneBackdropCanvas.restore();
+        removeCallbacks(hwRefreshRunnable);
+        postDelayed(hwRefreshRunnable, HW_REFRESH_IDLE_MS);
+    }
+
+    /** Strokes stamped into the backdrop after its GPU copy was made; drawn live over it. */
+    private final List<Stroke> strokesOverHw = new ArrayList<>();
+    /** Strokes stamped while the copy below was being made: it may lack them. */
+    private final List<Stroke> strokesDuringHwCopy = new ArrayList<>();
+    private boolean hwRefreshInFlight;
+    /** Bumped whenever the backdrop is edited in a way the GPU copy cannot follow. */
+    private int hwReleaseSeq;
+    private static final long HW_REFRESH_IDLE_MS = 350L;
+    private final Runnable hwRefreshRunnable = this::refreshBackdropHw;
+
+    /** Once the pen rests, upload the backdrop off-thread so the next strokes blit a GPU copy. */
+    private void refreshBackdropHw() {
+        Bitmap src = sceneBackdrop;
+        // A dirty backdrop is about to be redrawn, and the redraw brings its own copy.
+        if (src == null || src.isRecycled() || !sceneBackdropReady || sceneBackdropDirty
+                || hwRefreshInFlight) {
+            return;
+        }
+        if (sceneBackdropHw != null && sceneBackdropHwFor == src && strokesOverHw.isEmpty()) return;
+        if (activeStroke != null || isNavigating() || selGesture != SelGesture.NONE
+                || !Float.isNaN(eraseX) || navRebuildInFlight || navRebuildBusy) {
+            postDelayed(hwRefreshRunnable, HW_REFRESH_IDLE_MS);
+            return;
+        }
+        final int seq = hwReleaseSeq;
+        hwRefreshInFlight = true;
+        strokesDuringHwCopy.clear();
+        // Shares the rebuild thread's guards, so the source is neither recycled nor
+        // redrawn under the copy.
+        navRebuildBusy = true;
+        navRebuildSource = src;
+        try {
+            navRebuildExecutor.execute(() -> {
+                Bitmap hw = null;
+                try {
+                    hw = src.copy(Bitmap.Config.HARDWARE, false);
+                } catch (Throwable ignored) {
+                } finally {
+                    navRebuildSource = null;
+                    navRebuildBusy = false;
+                }
+                final Bitmap made = hw;
+                post(() -> applyBackdropHwRefresh(src, made, seq));
+            });
+        } catch (RuntimeException rejected) {
+            navRebuildBusy = false;
+            navRebuildSource = null;
+            hwRefreshInFlight = false;
+        }
+    }
+
+    private void applyBackdropHwRefresh(Bitmap src, Bitmap hw, int seq) {
+        hwRefreshInFlight = false;
+        if (hw == null) return;
+        if (src != sceneBackdrop || src.isRecycled() || seq != hwReleaseSeq) {
+            hw.recycle();
+            return;
+        }
+        releaseBackdropHw();
+        sceneBackdropHw = hw;
+        sceneBackdropHwFor = src;
+        strokesOverHw.addAll(strokesDuringHwCopy);
+        strokesDuringHwCopy.clear();
+        if (!strokesOverHw.isEmpty()) postDelayed(hwRefreshRunnable, HW_REFRESH_IDLE_MS);
+        // A rebuild asked for while the copy held the thread was turned away.
+        if (navSnapshotActive && pinchScaling && document.isOpen() && document.hasLandedPages()) {
+            requestNavRebuildAsync();
+        } else if (sceneBackdropDirty) {
+            removeCallbacks(warmBackdropRunnable);
+            post(warmBackdropRunnable);
+        }
+        invalidate();
     }
 
     private boolean hasSelection() {
@@ -8198,9 +9356,47 @@ public class CodeCanvasView extends View {
         if (toolType == MotionEvent.TOOL_TYPE_STYLUS
                 || toolType == MotionEvent.TOOL_TYPE_ERASER) {
             lastStylusAtMs = System.currentTimeMillis();
-        } else if (rejectAsPalm(event, toolType)) {
-            // Swallow it: returning true keeps the gesture from reaching pan/zoom.
+        } else if (action == MotionEvent.ACTION_DOWN) {
+            palmBySize = false;
+            palmStartScrollX = camScrollX;
+            palmStartScrollY = camScrollY;
+            palmStartScale = camScale;
+            if (rejectAsPalm(event, toolType)) {
+                // Swallow it: returning true keeps the gesture from reaching pan/zoom.
+                palmHeldGesture = true;
+                return true;
+            }
+        } else if (!palmHeldGesture) {
+            boolean inking = activeStroke != null || inkPointerId >= 0;
+            // An accepted gesture's own lift always gets through, or it never ends.
+            if ((inking || action != MotionEvent.ACTION_UP) && rejectAsPalm(event, toolType)) {
+                // While the pen writes, a cancel would end its stroke: just drop these.
+                if (!inking) {
+                    // Began as a fingertip and turned out to be the hand (it spread, or
+                    // came to rest by the nib): undo what it did and drop the rest.
+                    cancelGestureAsPalm(event);
+                }
+                return true;
+            }
+        } else if (action != MotionEvent.ACTION_CANCEL) {
+            if (!palmBySize && action == MotionEvent.ACTION_MOVE && event.getPointerCount() == 1
+                    && !rejectAsPalm(event, toolType)) {
+                // Past the palm window: start the gesture here, where the finger is now.
+                palmHeldGesture = false;
+                MotionEvent down = MotionEvent.obtain(event);
+                down.setAction(MotionEvent.ACTION_DOWN);
+                try {
+                    return onTouchEvent(down);
+                } finally {
+                    down.recycle();
+                }
+            }
+            // Nothing started that an UP could finish; extra fingers wait for the next DOWN.
+            if (action == MotionEvent.ACTION_UP) palmHeldGesture = false;
             return true;
+        }
+        if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_CANCEL) {
+            palmHeldGesture = false;
         }
 
         if (action == MotionEvent.ACTION_DOWN) {
@@ -8280,6 +9476,7 @@ public class CodeCanvasView extends View {
         }
 
         if (!stylus) {
+            if (handleThreeFingerScrub(event, action)) return true;
             // Stepping into a placed element is checked before anything else: the first
             // tap selects it, and from then on the selection handler eats every touch,
             // so a GestureDetector would never see the second one.
@@ -8479,6 +9676,11 @@ public class CodeCanvasView extends View {
                 activeStroke = new Stroke(inkColor, inkName);
                 activeStroke.brush = brush;
                 cancelShapeHold();
+                if (isDraggedBrush(brush)) {
+                    beginDraggedStroke(activeStroke, w[0], w[1], event.getX(index), event.getY(index));
+                    postInvalidateOnAnimation();
+                    break;
+                }
                 addSample(activeStroke, w[0], w[1], pressureOf(event, index, -1));
                 armShapeHold(activeStroke, event.getX(index), event.getY(index));
                 postInvalidateOnAnimation();
@@ -8488,6 +9690,15 @@ public class CodeCanvasView extends View {
                 if (activeStroke == null) break;
                 int pi = inkPointerIndex(event);
                 if (pi < 0) break;
+                if (isDraggedBrush(activeStroke.brush)) {
+                    // Tape and shapes follow the pen from where they started.
+                    float[] w = screenToWorld(event.getX(pi), event.getY(pi));
+                    Sample end = activeStroke.samples.get(activeStroke.samples.size() - 1);
+                    end.x = w[0];
+                    end.y = w[1];
+                    postInvalidateOnAnimation();
+                    break;
+                }
                 if (snapBase != null) {
                     // Snapped and still held: the pen now resizes the shape.
                     float[] w = screenToWorld(event.getX(pi), event.getY(pi));
@@ -8519,6 +9730,17 @@ public class CodeCanvasView extends View {
                 // moved is not a mark: when one pen shows up as two input devices, the first
                 // is cancelled the instant the second starts, and committing it left a stray
                 // one-point stroke (a dot) under the start of every real stroke.
+                if (activeStroke != null && isDraggedBrush(activeStroke.brush)) {
+                    int ui = inkPointerIndex(event);
+                    if (ui < 0) ui = index;
+                    if (action == MotionEvent.ACTION_CANCEL
+                            || !finishDraggedStroke(activeStroke, event.getX(ui), event.getY(ui))) {
+                        activeStroke = null;
+                        clearInkPointer();
+                        postInvalidateOnAnimation();
+                        break;
+                    }
+                }
                 boolean cancelledBeforeMoving = action == MotionEvent.ACTION_CANCEL
                         && activeStroke != null && activeStroke.samples.size() < 2;
                 if (activeStroke != null && !activeStroke.samples.isEmpty() && !cancelledBeforeMoving) {
@@ -9929,6 +11151,8 @@ public class CodeCanvasView extends View {
         if (sceneBackdropHw != null && !sceneBackdropHw.isRecycled()) sceneBackdropHw.recycle();
         sceneBackdropHw = null;
         sceneBackdropHwFor = null;
+        strokesOverHw.clear();
+        hwReleaseSeq++;
     }
 
     /** The bitmap to blit for the current backdrop: its GPU copy when that is current. */
@@ -10072,6 +11296,27 @@ public class CodeCanvasView extends View {
     }
 
     /** Draw grid + text fields + ink + images (+ selection chrome) in world space. */
+    /** The images of one layer: under the text and ink ({@code behind}) or over them. */
+    private void drawSceneImages(Canvas canvas, List<CanvasImage> imgs, Set<CanvasImage> skipImages,
+                                 RectF cull, RectF itemBounds, Paint imgInk, boolean behind) {
+        for (int i = 0; i < imgs.size(); i++) {
+            CanvasImage img = imgs.get(i);
+            if (img.behindInk != behind) continue;
+            if (skipImages != null && skipImages.contains(img)) continue;
+            synchronized (sharedItemDrawLock) {
+                itemBounds.set(img.bounds());
+                if (!RectF.intersects(cull, itemBounds)) continue;
+                if (img.isLive()) {
+                    // Live content is an overlay above this view; the page holds the slot,
+                    // so the space is reserved and scrolls with the document.
+                    canvas.drawRoundRect(itemBounds, 10f, 10f, webSlotPaint);
+                    continue;
+                }
+                img.draw(canvas, imgInk);
+            }
+        }
+    }
+
     private void drawSceneWorld(Canvas canvas, boolean includeOverlays) {
         drawSceneWorld(canvas, includeOverlays, backdropSkipSelected(),
                 viewMatrix, viewScale(), null);
@@ -10158,6 +11403,8 @@ public class CodeCanvasView extends View {
 
         titleInk.setTextSize(22f / Math.max(scale, 0.5f));
 
+        drawSceneImages(canvas, imgs, skipImages, cull, itemBounds, imgInk, true);
+
         for (int i = 0; i < texts.size(); i++) {
             CanvasTextField tf = texts.get(i);
             if (skipTexts != null && skipTexts.contains(tf)) continue;
@@ -10177,26 +11424,28 @@ public class CodeCanvasView extends View {
             }
         }
 
+        boolean anyTape = false;
         for (int i = 0; i < strokes.size(); i++) {
             Stroke s = strokes.get(i);
+            if (s.brush == BRUSH_TAPE) {
+                anyTape = true;
+                continue;
+            }
             if (skipStrokes != null && skipStrokes.contains(s)) continue;
             if (!s.bounds.isEmpty() && !RectF.intersects(cull, s.bounds)) continue;
             drawStroke(canvas, s, inkPaint, inkPath);
         }
 
-        for (int i = 0; i < imgs.size(); i++) {
-            CanvasImage img = imgs.get(i);
-            if (skipImages != null && skipImages.contains(img)) continue;
-            synchronized (sharedItemDrawLock) {
-                itemBounds.set(img.bounds());
-                if (!RectF.intersects(cull, itemBounds)) continue;
-                if (img.isLive()) {
-                    // Live content is an overlay above this view; the page holds the slot,
-                    // so the space is reserved and scrolls with the document.
-                    canvas.drawRoundRect(itemBounds, 10f, 10f, webSlotPaint);
-                    continue;
-                }
-                img.draw(canvas, imgInk);
+        drawSceneImages(canvas, imgs, skipImages, cull, itemBounds, imgInk, false);
+
+        // Tape goes over everything it covers, images included.
+        if (anyTape) {
+            for (int i = 0; i < strokes.size(); i++) {
+                Stroke s = strokes.get(i);
+                if (s.brush != BRUSH_TAPE) continue;
+                if (skipStrokes != null && skipStrokes.contains(s)) continue;
+                if (!s.bounds.isEmpty() && !RectF.intersects(cull, s.bounds)) continue;
+                drawStroke(canvas, s, inkPaint, inkPath);
             }
         }
 

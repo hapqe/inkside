@@ -56,6 +56,11 @@ final class Projects {
                 }
 
                 @Override
+                public void onShowMenu(View anchor) {
+                    act.overflowMenu.showOverflowMenu(anchor, true);
+                }
+
+                @Override
                 public void onLibraryMessage(String msg) {
                     if (msg != null && !msg.isEmpty()) {
                         act.snackbar(msg, false);
@@ -63,7 +68,7 @@ final class Projects {
                 }
             });
             act.allProjectsView.setVisibility(View.GONE);
-            act.allProjectsView.setElevation(act.dp(40));
+            // Its height comes from liftPanel each time it is shown (Zen may have changed).
             act.allProjectsView.setTopInset(act.statusBarHeight());
             applyAllProjectsTheme();
         }
@@ -115,6 +120,7 @@ final class Projects {
         reattachAllProjectsView();
         if (act.allProjectsView != null) {
             act.allProjectsView.setVisibility(View.VISIBLE);
+            act.liftPanel(act.allProjectsView);
             act.allProjectsView.bringToFront();
             act.allProjectsView.showAndReload();
         }

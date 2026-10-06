@@ -17,7 +17,6 @@ import android.view.animation.DecelerateInterpolator;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.PopupMenu;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import java.util.ArrayList;
@@ -60,7 +59,7 @@ final class Favorites {
         overlay.setBackgroundColor(0x99000000);
         overlay.setOnClickListener(v -> dismissFavoritesMenu());
         // Above All Projects (elevation 40dp), where favorites can be added too.
-        overlay.setElevation(act.dp(48));
+        act.liftPanel(overlay);
 
         LinearLayout card = new LinearLayout(act);
         card.setOrientation(LinearLayout.VERTICAL);
@@ -423,25 +422,11 @@ final class Favorites {
         if (anchor == null || favId == null) return;
         anchor.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
         FavoritesStore fav = FavoritesStore.get(act);
-        PopupMenu popup = new PopupMenu(act, anchor);
         boolean on = fav.isFavorite(favId);
-        popup.getMenu().add(0, 1, 0, on ? "Remove from favorites" : "Add to favorites");
-        if (extraLabel != null && extraAction != null) {
-            popup.getMenu().add(0, 2, 1, extraLabel);
-        }
-        popup.setOnMenuItemClickListener(item -> {
-            int id = item.getItemId();
-            if (id == 1) {
-                fav.toggle(favId);
-                return true;
-            }
-            if (id == 2 && extraAction != null) {
-                extraAction.run();
-                return true;
-            }
-            return false;
-        });
-        popup.show();
+        M3Menu menu = new M3Menu(act);
+        menu.add(R.drawable.ic_star, on ? "Remove from favorites" : "Add to favorites", () -> fav.toggle(favId));
+        if (extraLabel != null && extraAction != null) menu.add(0, extraLabel, extraAction);
+        menu.showUnder(anchor);
     }
 
     List<RadialFavoritesPainter.Item> buildRadialFavoriteItems() {
@@ -552,7 +537,7 @@ final class Favorites {
                 }
                 break;
             case FavoritesStore.TOOL_PENCIL:
-                act.penTools.selectPencil(act.selectedColorIndex);
+                act.penTools.selectPen();
                 break;
             case FavoritesStore.TOOL_ERASER:
                 act.penTools.selectEraser();

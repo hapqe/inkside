@@ -541,6 +541,66 @@ async function main() {
       && !!(await lStore.snapshot("")).concepts["chain rule"]);
     await fsp.rm(lws, { recursive: true, force: true });
 
+    // Study plan: spaced reviews, prerequisites before goals, sized to the weekly goal.
+    const P = await import("../src/planner.mjs");
+    const DAY = 24 * 3600 * 1000;
+    const now = Date.parse("2026-10-06T12:00:00Z");
+    const ev = (daysAgo, level, source = "student") =>
+      ({ at: new Date(now - daysAgo * DAY).toISOString(), level, source, note: "x" });
+    const planState = {
+      weeklyGoalMinutes: 300,
+      concepts: {
+        "limits": { name: "Limits", level: "recalled", evidence: [ev(10, "explained", "tutor"), ev(5, "recalled")] },
+        "derivative": { name: "Derivative", level: "applied", evidence: [ev(1, "applied")] },
+        "series": { name: "Series", level: "mastered", evidence: [ev(60, "mastered")] },
+      },
+      goals: {
+        "M/sheet.pdf": { items: [
+          { id: "g1", task: "Ex 1", concepts: ["Derivative"], status: "open", hintLevel: 0 },
+          { id: "g2", task: "Ex 2", concepts: ["Integrals"], status: "open", hintLevel: 0 },
+          { id: "g3", task: "Ex 3", concepts: ["Limits"], status: "open", hintLevel: 2, awaitingStudent: true },
+          { id: "g4", task: "Ex 4", concepts: ["Derivative"], status: "solved_by_student", hintLevel: 0 },
+        ] },
+      },
+    };
+    const sch = P.reviewSchedule(planState.concepts["limits"], now);
+    check("a recalled topic comes back two days after it was last shown", sch.intervalDays === 2 && sch.overdue > 2);
+    const sch2 = P.reviewSchedule({ level: "recalled", evidence: [ev(9, "recalled"), ev(5, "recalled")] }, now);
+    check("showing it again stretches the interval", sch2.intervalDays > sch.intervalDays);
+    check("a slip back starts the spacing over",
+      P.reviewSchedule({ level: "explained", evidence: [ev(9, "applied"), ev(1, "explained", "tutor")] }, now).intervalDays === 1);
+    const plan = P.planNext(planState, { studiedMinutes: 120, daysLeft: 3, now });
+    const titles = plan.items.map((i) => i.title);
+    check("the weekly goal sets today's session", plan.sessionMinutes === 60 && plan.remainingWeekMinutes === 180);
+    check("due reviews come first and ask for the next rung",
+      plan.items[0].kind === "review" && plan.items[0].concept === "Limits" && /Apply/.test(plan.items[0].ask));
+    check("a long-overdue mastered topic is reviewed too", titles.includes("Review: Series"));
+    check("a topic practised yesterday is not reviewed yet", !titles.includes("Review: Derivative"));
+    check("a goal under way is continued", titles.includes("Continue: Ex 3"));
+    check("a goal with an unmet topic is not started; the topic is learned first",
+      !titles.includes("Work on: Ex 2") && titles.includes("Learn: Integrals"));
+    check("finished goals are left alone", !titles.some((t) => t.includes("Ex 4")));
+    check("the plan fits the session", plan.plannedMinutes <= plan.sessionMinutes);
+    const done = P.planNext(planState, { studiedMinutes: 400, daysLeft: 2, now });
+    check("a week already done says so", done.weekDone === true);
+    const noGoal = P.planNext({ concepts: {}, goals: {} }, { now });
+    check("nothing to do gives an empty plan", noGoal.items.length === 0 && noGoal.weeklyGoalMinutes === 0);
+    check("plan items carry a priority", plan.items.every((i) => typeof i.priority === "number"));
+    const behind = { ...plan, weeklyGoalMinutes: 300, perDayMinutes: 80, weekDone: false };
+    const ahead = { ...plan, weeklyGoalMinutes: 300, perDayMinutes: 10, weekDone: false };
+    const picked = P.pickNext([{ project: "A", plan: ahead }, { project: "B", plan: behind }, { project: "C", plan: noGoal }]);
+    check("across projects, the one behind its weekly goal goes first",
+      picked[0].project === "B" && picked.length === 2);
+    const wg = await lStore.setWeeklyGoal({ project: "Physics", minutes: 240 });
+    check("a weekly goal is kept per project",
+      wg.accepted && (await lStore.snapshot("Physics")).weeklyGoalMinutes === 240
+      && !(await lStore.snapshot("")).weeklyGoalMinutes);
+    check("the weekly goal is in the progress view", L.learningProgress(await lStore.snapshot("Physics")).weeklyGoalMinutes === 240);
+    check("a bad weekly goal is refused", !(await lStore.setWeeklyGoal({ minutes: -5 })).accepted);
+    const pCtx = L.formatLearningContext(await lStore.snapshot(""), {
+      openFile: "c/sheet.pdf", planText: P.formatPlanForPrompt(plan) });
+    check("the plan reaches the tutor's prompt", pCtx.includes("Study plan") && pCtx.includes("Review: Limits"));
+
     // A model from before projects were kept apart is split up by project.
     const mws = await fsp.mkdtemp(path.join(os.tmpdir(), "cc-learning-"));
     await fsp.mkdir(path.join(mws, ".learning"), { recursive: true });
@@ -586,6 +646,15 @@ async function main() {
     check("learning block in the prompt when on", (lpv.body?.prompt || "").includes("Learning Mode is ON"));
     const lpvOff = await json("POST", "/chat/preview", { message: "hi", learningMode: false });
     check("per-request switch overrides the stored mode", !(lpvOff.body?.prompt || "").includes("Learning Mode is ON"));
+    const wgSet = await json("POST", "/learning/weekly-goal", { project: "proj", minutes: 180 });
+    check("weekly goal can be set over HTTP", wgSet.body?.weeklyGoalMinutes === 180);
+    const wgPlan = await json("GET", "/learning/plan?project=proj&studiedMin=60&daysLeft=4");
+    check("the plan endpoint uses the reported study time",
+      wgPlan.body?.weeklyGoalMinutes === 180 && wgPlan.body?.remainingWeekMinutes === 120 && wgPlan.body?.sessionMinutes === 30);
+    const wgBad = await json("POST", "/learning/weekly-goal", { project: "proj", minutes: "lots" });
+    const nextAll = await json("POST", "/learning/next", { docMinutes: { "proj/a.pdf": 30, "../x.pdf": 5 }, daysLeft: 3 });
+    check("what to do next answers across projects", nextAll.status === 200 && "next" in (nextAll.body || {}));
+    check("weekly goal needs a number", wgBad.status === 400);
     const badMode = await json("POST", "/learning/mode", { enabled: "yes" });
     check("mode needs a boolean", badMode.status === 400);
     const lReset = await json("POST", "/learning/reset", {});

@@ -105,6 +105,7 @@ final class SettingsPanel {
         cardLp.rightMargin = act.dp(MainActivity.SPACE_XL);
         overlay.addView(shell, cardLp);
 
+        act.liftPanel(overlay);
         act.rootLayout.addView(overlay, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         overlay.bringToFront();
@@ -138,6 +139,32 @@ final class SettingsPanel {
                 "Colours for the whole app and the canvas", null, null), MainActivity.matchWrap());
         themeBlock.addView(themeSwatchRow(card), MainActivity.matchWrap());
         card.addView(settingsGroup("Appearance", themeBlock));
+
+        card.addView(settingsGroup("Gestures",
+                settingsSwitchItem(R.drawable.ic_undo, "Three-finger undo",
+                        "Drag three fingers left or right to step back and forward through your changes",
+                        act.canvas == null || act.canvas.isThreeFingerUndo(), on -> {
+                            if (act.canvas != null) act.canvas.setThreeFingerUndo(on);
+                            act.persistence.scheduleSave();
+                        }),
+                settingsSwitchItem(R.drawable.ic_chat, "Two-finger swipe: chat",
+                        "Swipe two fingers sideways anywhere to pull the chat out or push it away",
+                        act.twoFingerChatSwipe, on -> {
+                            act.twoFingerChatSwipe = on;
+                            act.persistence.scheduleSave();
+                        }),
+                settingsSwitchItem(R.drawable.ic_description, "Three-finger document switcher",
+                        "Slide three fingers up or down to pick a recent document; lift to open it",
+                        act.canvas == null || act.canvas.isThreeFingerDocs(), on -> {
+                            if (act.canvas != null) act.canvas.setThreeFingerDocs(on);
+                            act.persistence.scheduleSave();
+                        }),
+                settingsSwitchItem(R.drawable.ic_star, "Three-finger tap: quick favorites",
+                        "Tap with three fingers to open your quick favorites there; tap one to use it",
+                        act.canvas == null || act.canvas.isThreeFingerFavorites(), on -> {
+                            if (act.canvas != null) act.canvas.setThreeFingerFavorites(on);
+                            act.persistence.scheduleSave();
+                        })));
 
         card.addView(settingsGroup("Stylus",
                 settingsSwitchItem(R.drawable.ic_back_hand, "Palm rejection",

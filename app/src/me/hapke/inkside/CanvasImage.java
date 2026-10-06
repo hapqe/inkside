@@ -16,6 +16,10 @@ final class CanvasImage {
     float rotationDeg;
     /** Left out of the presentation slide; still shown on the tablet. */
     boolean presentHidden;
+    /** Mirrored along its own width / height axis (applied after the rotation). */
+    boolean flipX, flipY;
+    /** Drawn under the handwriting and text instead of over it. */
+    boolean behindInk;
     /** Workspace path for agent viz images — refreshed when the file updates. */
     String vizPath;
     /** Source workspace path for dropped/placed images (non-agent). */
@@ -47,6 +51,15 @@ final class CanvasImage {
         this.width = width;
         this.height = height;
         this.rotationDeg = 0f;
+    }
+
+    /** Copies how it is shown — rotation, mirroring, layer, presentation — onto a duplicate. */
+    void copyLookTo(CanvasImage dup) {
+        dup.presentHidden = presentHidden;
+        dup.rotationDeg = rotationDeg;
+        dup.flipX = flipX;
+        dup.flipY = flipY;
+        dup.behindInk = behindInk;
     }
 
     synchronized void markDirty() {
@@ -111,6 +124,7 @@ final class CanvasImage {
         canvas.save();
         canvas.translate(cx, cy);
         canvas.rotate(rotationDeg);
+        if (flipX || flipY) canvas.scale(flipX ? -1f : 1f, flipY ? -1f : 1f);
         drawDst.set(-width * 0.5f, -height * 0.5f, width * 0.5f, height * 0.5f);
         canvas.drawBitmap(bitmap, null, drawDst, paint);
         canvas.restore();
@@ -124,6 +138,9 @@ final class CanvasImage {
         o.put("height", height);
         o.put("rotationDeg", rotationDeg);
         if (presentHidden) o.put("presentHidden", true);
+        if (flipX) o.put("flipX", true);
+        if (flipY) o.put("flipY", true);
+        if (behindInk) o.put("behindInk", true);
         if (vizPath != null && !vizPath.isEmpty()) o.put("vizPath", vizPath);
         if (livePath != null && !livePath.isEmpty()) o.put("livePath", livePath);
         if (liveAspect > 0f) o.put("liveAspect", liveAspect);
@@ -186,6 +203,9 @@ final class CanvasImage {
                 (float) o.getDouble("height"));
         img.rotationDeg = (float) o.optDouble("rotationDeg", 0);
         img.presentHidden = o.optBoolean("presentHidden", false);
+        img.flipX = o.optBoolean("flipX", false);
+        img.flipY = o.optBoolean("flipY", false);
+        img.behindInk = o.optBoolean("behindInk", false);
         img.vizPath = o.optString("vizPath", null);
         if (img.vizPath != null && img.vizPath.isEmpty()) img.vizPath = null;
         img.sourcePath = o.optString("sourcePath", null);

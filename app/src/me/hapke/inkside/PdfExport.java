@@ -157,7 +157,7 @@ final class PdfExport {
             cardLp.leftMargin = act.dp(MainActivity.SPACE_XL);
             cardLp.rightMargin = act.dp(MainActivity.SPACE_XL);
             overlay.addView(card, cardLp);
-            overlay.setTranslationZ(act.dp(act.zenMode ? MainActivity.ZEN_LIFT_DP + 60 : 60));
+            act.liftPanel(overlay);
             act.rootLayout.addView(overlay, new FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         }

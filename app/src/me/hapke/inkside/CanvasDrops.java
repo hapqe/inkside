@@ -48,6 +48,10 @@ final class CanvasDrops {
                 // worldFromScreen hands back a shared scratch array — copy it.
                 float[] w = {w0[0], w0[1]};
                 Object local = event.getLocalState();
+                if (local instanceof Stickers.StickerDrag) {
+                    act.stickers.placeAt((Stickers.StickerDrag) local, w[0], w[1]);
+                    return true;
+                }
                 if (local instanceof FolderExplorerView.ExplorerDrag) {
                     handleCanvasWorkspaceDrop(local.toString(), w[0], w[1]);
                     return true;
