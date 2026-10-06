@@ -1,0 +1,1 @@
+Tape, shapes and a sticker library. A highlighter that only tints what is under it. Three-finger gestures for undo, switching documents and quick favorites; two fingers pull the chat in and out. Check my work, a weekly study goal, and a spaced plan of what to learn next. Smoother panning after writing and smarter palm rejection.
