@@ -1,0 +1,1 @@
+Connecting is just an access token: paste it and you're in, no address and no shared network. Hosts accept access tokens only, print a ready-to-paste token on start (npm run token), and can carry their web address inside it. The two-finger chat swipe only starts from a clean sideways swipe.

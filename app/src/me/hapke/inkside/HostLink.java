@@ -17,8 +17,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Talking to a host before it is part of the app: connecting by address (the host
- * answers devices on its own network) and checking which saved address still works.
+ * Talking to a host before it is part of the app: connecting with an access token (all a
+ * device needs) and checking which of a saved host's addresses still answers.
  */
 final class HostLink {
     private HostLink() {}
@@ -64,78 +64,83 @@ final class HostLink {
         }
     }
 
+    /** Where a plain access token connects: the Inkside test computer, over the internet. */
+    static final String TEST_COMPUTER_URL = "https://inkside.hapke.me";
+    private static final String CONNECT_PREFIX = "ink1.";
+
     /**
-     * Connects to the computer at {@code address} ("192.168.1.20", "host:8787" or a
-     * URL): it answers /health with its id and name when this tablet is on its
-     * network. Saves it and calls back on the main thread.
+     * What an access token says: the token itself, and where its host is. A connection
+     * token ("ink1." + base64url of {"u": [urls], "t": token}, printed by a host) carries
+     * its addresses; a plain token belongs to the test computer.
      */
-    static void connect(Context ctx, String address, String token, Result<PairedHosts.Host> cb) {
-        final Context app = ctx.getApplicationContext();
-        final String url = normalize(address);
-        new Thread(() -> {
-            String error;
+    static String[] decode(String raw, java.util.List<String> urls) {
+        String s = raw == null ? "" : raw.trim();
+        if (s.startsWith(CONNECT_PREFIX)) {
             try {
-                JSONObject health = request("GET", url + "/health", null, token, 4000);
-                String id = health.optString("hostId", "");
-                if (health.optBoolean("authenticated", false) && !id.isEmpty()) {
-                    PairedHosts.Host h = PairedHosts.get(app, id);
-                    if (h == null) h = new PairedHosts.Host(id);
-                    h.name = health.optString("name", "Computer");
-                    h.port = Uri.parse(url).getPort();
-                    h.token = token == null ? "" : token;
-                    if (!h.urls.contains(url)) h.urls.add(url);
-                    h.preferUrl(url);
-                    PairedHosts.save(app, h);
-                    final PairedHosts.Host done = h;
-                    MAIN.post(() -> cb.onSuccess(done));
-                    return;
+                byte[] json = android.util.Base64.decode(s.substring(CONNECT_PREFIX.length()),
+                        android.util.Base64.URL_SAFE | android.util.Base64.NO_PADDING | android.util.Base64.NO_WRAP);
+                JSONObject o = new JSONObject(new String(json, StandardCharsets.UTF_8));
+                org.json.JSONArray u = o.optJSONArray("u");
+                for (int i = 0; u != null && i < u.length(); i++) {
+                    String url = u.optString(i, "").trim().replaceAll("/+$", "");
+                    if (!url.isEmpty()) urls.add(url);
                 }
-                if ("network".equals(health.optString("reason"))) {
-                    error = "that computer only accepts devices on its own network — "
-                            + "connect this tablet to the same Wi-Fi";
-                } else if ("token".equals(health.optString("reason"))) {
-                    error = token == null || token.isEmpty()
-                            ? "that computer needs an access token — enter the one you were given"
-                            : "that access token was not accepted";
-                } else {
-                    error = "that computer runs an older host — update it first";
-                }
+                return new String[]{o.optString("t", "")};
             } catch (Exception e) {
-                error = url.startsWith("https://")
-                        ? "no answer from " + url.replace("https://", "")
-                                + " — check the address and this tablet's internet connection"
-                        : "no answer from " + url.replace("http://", "")
-                                + " — is the Inkside host running, and is this tablet on the same network?";
+                return new String[]{""};
+            }
+        }
+        urls.add(TEST_COMPUTER_URL);
+        return new String[]{s};
+    }
+
+    /**
+     * Connects with an access token: tries the addresses it names (or the test computer)
+     * until one answers /health as authenticated. Saves the host and calls back on the
+     * main thread.
+     */
+    static void connect(Context ctx, String accessToken, Result<PairedHosts.Host> cb) {
+        final Context app = ctx.getApplicationContext();
+        final java.util.List<String> urls = new java.util.ArrayList<>();
+        final String token = decode(accessToken, urls)[0];
+        new Thread(() -> {
+            String error = token.isEmpty()
+                    ? "that is not an access token — copy it again, all of it"
+                    : null;
+            for (String url : urls) {
+                if (token.isEmpty()) break;
+                try {
+                    JSONObject health = request("GET", url + "/health", null, token, 6000);
+                    String id = health.optString("hostId", "");
+                    if (health.optBoolean("authenticated", false) && !id.isEmpty()) {
+                        PairedHosts.Host h = PairedHosts.get(app, id);
+                        if (h == null) h = new PairedHosts.Host(id);
+                        h.name = health.optString("name", "Computer");
+                        h.port = Uri.parse(url).getPort();
+                        h.token = token;
+                        h.urls.clear();
+                        h.urls.addAll(urls);
+                        h.preferUrl(url);
+                        PairedHosts.save(app, h);
+                        final PairedHosts.Host done = h;
+                        MAIN.post(() -> cb.onSuccess(done));
+                        return;
+                    }
+                    if ("token".equals(health.optString("reason"))) {
+                        error = "that access token was not accepted";
+                    } else if (error == null) {
+                        error = "that computer runs an older host — update it first";
+                    }
+                } catch (Exception e) {
+                    if (error == null) {
+                        error = "no answer — check this tablet's internet connection, "
+                                + "and that the computer is running";
+                    }
+                }
             }
             final String msg = error;
             MAIN.post(() -> cb.onError(msg));
         }, "connect").start();
-    }
-
-    /**
-     * "192.168.1.20" → "http://192.168.1.20:8787"; a name on the internet ("inkside.hapke.me")
-     * → "https://inkside.hapke.me", since such a host sits behind a TLS proxy.
-     */
-    static String normalize(String address) {
-        String a = address == null ? "" : address.trim();
-        boolean scheme = a.startsWith("http://") || a.startsWith("https://");
-        if (!scheme) a = (isInternetName(a) ? "https://" : "http://") + a;
-        a = a.replaceAll("/+$", "");
-        // https addresses (a proxy in front) use their own port.
-        if (Uri.parse(a).getPort() < 0 && !a.startsWith("https://")) a = a + ":8787";
-        return a;
-    }
-
-    /**
-     * A bare domain name with no port: not an address, not a name on the local network
-     * (".local", a tailnet's ".ts.net", a single-label machine name).
-     */
-    static boolean isInternetName(String address) {
-        String a = address.toLowerCase(java.util.Locale.ROOT).replaceAll("/.*$", "");
-        if (a.isEmpty() || a.startsWith("[") || a.contains(":") || !a.contains(".")) return false;
-        if (a.matches("[0-9.]+")) return false;
-        return !(a.endsWith(".local") || a.endsWith(".ts.net") || a.endsWith(".lan")
-                || a.endsWith(".home") || a.endsWith(".internal"));
     }
 
     /**

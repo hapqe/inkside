@@ -2277,7 +2277,14 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
 
     /** Settings → Gestures. */
     boolean twoFingerChatSwipe = true;
-    private static final int TWO_IDLE = 0, TWO_ARMED = 1, TWO_SLIDE = 2, TWO_DONE = 3;
+    private static final int TWO_IDLE = 0, TWO_ARMED = 1, TWO_SLIDE = 2, TWO_DONE = 3,
+            /** Not a swipe: everything passes through until the touch ends. */
+            TWO_DONE_PASS = 4;
+    /** Where and when the touch's first finger went down: a swipe must start with both. */
+    private float twoFirstX, twoFirstY;
+    private long twoFirstMs;
+    /** The second finger may follow the first by this much, before the first has moved. */
+    private static final long TWO_TOGETHER_MS = 220L;
     private int twoState = TWO_IDLE;
     private float twoStartX, twoStartY, twoOriginX;
     private final android.util.SparseArray<Float> twoPointerStartX = new android.util.SparseArray<>();
@@ -2310,7 +2317,21 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
      */
     private boolean handleTwoFingerChat(MotionEvent ev) {
         int action = ev.getActionMasked();
-        if (action == MotionEvent.ACTION_DOWN) twoState = TWO_IDLE;
+        if (action == MotionEvent.ACTION_DOWN) {
+            twoState = TWO_IDLE;
+            twoFirstX = ev.getRawX();
+            twoFirstY = ev.getRawY();
+            twoFirstMs = ev.getEventTime();
+        }
+        // One finger already moving (a pan, a stroke): this touch is not a swipe.
+        if (twoState == TWO_IDLE && action == MotionEvent.ACTION_MOVE && ev.getPointerCount() == 1
+                && Math.hypot(ev.getRawX() - twoFirstX, ev.getRawY() - twoFirstY) > dp(8)) {
+            twoState = TWO_DONE_PASS;
+        }
+        if (twoState == TWO_DONE_PASS) {
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) twoState = TWO_IDLE;
+            return false;
+        }
         if (twoState == TWO_DONE) {
             if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) twoState = TWO_IDLE;
             return true;
@@ -2336,7 +2357,11 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
             return true;
         }
         if (action == MotionEvent.ACTION_POINTER_DOWN && ev.getPointerCount() == 2 && twoState == TWO_IDLE) {
-            if (chatPanel == null || !computers.hasHost() || !aiEnabled) return false;
+            if (chatPanel == null || !computers.hasHost() || !aiEnabled
+                    || ev.getEventTime() - twoFirstMs > TWO_TOGETHER_MS) {
+                twoState = TWO_DONE_PASS;
+                return false;
+            }
             twoState = TWO_ARMED;
             twoStartX = meanX(ev);
             twoStartY = meanY(ev);
@@ -2347,22 +2372,21 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         if (twoState != TWO_ARMED) return false;
         if (action == MotionEvent.ACTION_MOVE && ev.getPointerCount() == 2) {
             float dx = meanX(ev) - twoStartX, dy = meanY(ev) - twoStartY;
-            if (Math.abs(dy) > dp(28) && Math.abs(dy) > Math.abs(dx)) {
-                twoState = TWO_IDLE;  // scrolling or panning, not a swipe
-                return false;
-            }
-            if (Math.abs(dx) < dp(20) || Math.abs(dx) < Math.abs(dy) * 1.5f) return false;
-            // Each finger has gone the same way, and well: a pinch moves them apart.
-            for (int i = 0; i < 2; i++) {
+            // The first real movement decides, once: it has to be a clean sideways swipe the
+            // right way from the very start. Anything else (a pan, a pinch, a diagonal) gives
+            // up on the swipe for the rest of this touch.
+            if (Math.hypot(dx, dy) < dp(14)) return false;
+            boolean sideways = Math.abs(dx) > Math.abs(dy) * 2f;
+            boolean together = true;
+            for (int i = 0; i < 2 && together; i++) {
                 Float sx = twoPointerStartX.get(ev.getPointerId(i));
-                if (sx == null) return false;
-                float pdx = ev.getRawX(i) - sx;
-                if (Math.signum(pdx) != Math.signum(dx) || Math.abs(pdx) < dp(10)) return false;
+                float pdx = sx == null ? 0f : ev.getRawX(i) - sx;
+                together = sx != null && Math.signum(pdx) == Math.signum(dx) && Math.abs(pdx) >= dp(6);
             }
             // Only the way that makes sense: out when it is closed, away when it is open.
             boolean towardEdge = chatOnLeft ? dx < 0 : dx > 0;
-            if (chatCollapsed == towardEdge) {
-                twoState = TWO_IDLE;
+            if (!sideways || !together || chatCollapsed == towardEdge) {
+                twoState = TWO_DONE_PASS;
                 return false;
             }
             if (!chatView.beginGestureSlide()) {
@@ -2382,8 +2406,9 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
             chatView.dragGestureSlide(twoLastX - twoOriginX);
             return true;
         }
-        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL
-                || action == MotionEvent.ACTION_POINTER_UP) {
+        if (action == MotionEvent.ACTION_POINTER_UP) {
+            twoState = TWO_DONE_PASS;  // a finger off before it became a swipe
+        } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
             twoState = TWO_IDLE;
         }
         return false;

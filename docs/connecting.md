@@ -5,9 +5,9 @@ agent chat, running scripts, voice dictation and a workspace on the computer.
 
 ```
  Device (app)                          Computer (host)
- ┌─────────────────────┐ enter its IP  ┌──────────────────────────────┐
+ ┌─────────────────────┐ access token  ┌──────────────────────────────┐
  │ This device's       │ ────────────▶ │ Inkside host (Node)          │
- │ workspace (offline) │  same network │  ├ agent: Claude Code login  │
+ │ workspace (offline) │               │  ├ agent: Claude Code login  │
  │                     │ ◀──────────── │  │   or API key              │
  │ Computer workspace  │      HTTP     │  ├ scripts, voice, search    │
  └─────────────────────┘               │  └ ~/Inkside (the workspace) │
@@ -21,12 +21,12 @@ On the computer (needs Node.js 20+):
 ```bash
 cd host
 npm install
-npm start          # prints the address to enter in the app
+npm start          # prints the access token to enter in the app
 ```
 
-Then in the app: **⋮ → Connect a computer → My own computer**, and type the address it printed
-(e.g. `192.168.1.20`). Your tablet or phone must be on the same network as the computer. The host keeps
-its documents in `~/Inkside`. Details, running it as a background service and every
+Then in the app: **⋮ → Connect a computer**, and paste the access token it printed (`npm run
+token` prints it again). The token carries where to find the computer; set `INKSIDE_PUBLIC_URL`
+when it is reached through a proxy on the internet. The host keeps its documents in `~/Inkside`. Details, running it as a background service and every
 setting: [host/README.md](../host/README.md).
 
 ## Workspaces
@@ -38,14 +38,14 @@ at a time; **Settings → Remote** connects and disconnects. Without a computer 
 dictation are unavailable and everything else works the same. Ink and chats sync with the documents;
 undo history stays on each device.
 
-Connect a computer by typing its address (same network, or the same Tailscale tailnet), or, for a
-computer shared over the internet with an access token, its web address (e.g. `inkside.example.com`).
+Connect a computer with its access token, and nothing else. Testers paste the token they were
+given and reach the Inkside test computer over the internet.
 
 ## Share your computer with people you trust
 
-You can let friends or classmates use your host over the internet. Set an access token on the
-host; they connect by typing its web address (e.g. `inkside.example.com`) in the first field and
-the token in the second. Their documents stay on their own device, and the agent and scripts run
+You can let friends or classmates use your host over the internet. Put it behind a TLS proxy, set
+`BRIDGE_TOKEN` and `INKSIDE_PUBLIC_URL`, and give each person their own token
+(`npm run testers -- add <name> --url <public url>`); they paste it, and that is all. Their documents stay on their own device, and the agent and scripts run
 in a sandbox that sees only the shared workspace.
 
 Things to know before you do:
@@ -57,8 +57,8 @@ Setup, tokens and the proxy are in [Sharing a computer](../host/README.md#sharin
 
 ## Security
 
-Without an access token the host trusts its network: anyone who can reach it can do what your
-user account can. With one it becomes a shared host whose agent and scripts are sandboxed to the
+Every device needs an access token. The owner's token can do what your user account can; with
+`BRIDGE_TOKEN` set the host is shared, and its agent and scripts are sandboxed to the
 workspace — see [Sharing a computer](../host/README.md#sharing-a-computer). To report a
 vulnerability, see [SECURITY.md](../SECURITY.md).
 

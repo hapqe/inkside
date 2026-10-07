@@ -7,8 +7,10 @@ the app's own `LocalWorkspace` mirrors; the agent and canvas routes are listed i
 
 ## Connecting
 
-The user types the computer's address (`192.168.1.20`, or `host:port`; the port
-defaults to 8787). The app asks `GET /health`:
+The user pastes an access token; nothing else. A plain token belongs to the Inkside test
+computer (`https://inkside.hapke.me`). A connection token, printed by a host (`npm run token`),
+is `ink1.` + base64url of `{"u": [urls], "t": token}`: the app tries the URLs in order. It sends
+the token as `Authorization: Bearer <token>` and asks `GET /health`:
 
 - From a device the host lets in, it answers
   `{ok, version, hostId, name, authenticated: true, shared, …}` (a host for just its
@@ -17,25 +19,18 @@ defaults to 8787). The app asks `GET /health`:
   address.
 - From anywhere else it answers only
   `{ok, version, authRequired: true, authenticated: false, reason}` —
-  `reason` is `network` (not on this computer's network), `token` (the host
-  requires its access token, `BRIDGE_TOKEN`: the app sends it as `Authorization: Bearer <token>`),
-  `origin` (a browser request from another site) or `host` (addressed by an unknown host name).
-  Every other route answers `403` or `401`.
+  `reason` is `token` (no valid access token) or `origin` (a browser request from another
+  site). Every other route answers `401` or `403`.
 
-**Same network** means the device's IPv4 address lies in the subnet of one of the
-computer's network interfaces, or both are on the same Tailscale tailnet
-(100.64.0.0/10); loopback always counts.
-
-With `BRIDGE_TOKEN` set the network does not matter: a request must carry the token, from anywhere
-(this computer too, unless `BRIDGE_TRUST_LOOPBACK=1`), and the host is **shared**: see
+Only access tokens let a device in, from anywhere, this computer included: the owner's
+(`BRIDGE_TOKEN`, or one the host made) or a tester's (`<state dir>/tokens.json`). With
+`BRIDGE_TOKEN` set the host is **shared**: see
 [host/README.md](../host/README.md#sharing-a-computer). `INKSIDE_FIXED_MODEL=1` (the default
 when shared) makes `/agent/settings` report `fixedModel: true` and refuses changes to the model
 and provider.
 
 The host sends no CORS headers and refuses requests whose `Origin` is not its own, so web pages
-cannot use it. A request let in without a token must name the host by an IP address,
-`localhost`, the computer's name, a `.local` or `.ts.net` name, or one in
-`INKSIDE_ALLOWED_HOSTS` (this blocks DNS rebinding).
+cannot use it.
 
 ## Sync
 

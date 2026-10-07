@@ -19,18 +19,17 @@ npm start
 ```
 
 On first start the host creates `~/Inkside` (the workspace), gives itself an id and a name
-(the computer's name) and prints the address to enter in the app.
+(the computer's name) and an access token, and prints the token to enter in the app.
 
 ## Connect a tablet
 
-In the app: **⋮ → Connect a computer**, and type this computer's IP address (printed
-when the host starts, e.g. `192.168.1.20`; add `:port` if you changed `PORT`).
+In the app: **⋮ → Connect a computer**, and paste the access token the host prints when it
+starts (`npm run token` prints it again). That is all a device needs: the token carries where
+to reach the host — `INKSIDE_PUBLIC_URL` if you set one (a TLS proxy, see below), else this
+computer's addresses on its networks.
 
-The host only answers devices on a network this computer is on: the tablet's address
-must be in the subnet of one of this computer's network interfaces (same Wi-Fi), or on
-the same Tailscale tailnet. Anything else gets `403`. There are no accounts or codes —
-anyone on your network can reach the host, so run it on networks you trust (or set an
-access token, see [Sharing a computer](#sharing-a-computer)).
+Every request needs an access token. Nothing else lets a device in — not being on the same
+network, not even being this computer. Without a token a request gets `401`.
 
 ## Settings
 
@@ -42,15 +41,13 @@ All optional — in the environment or in `host/.env` (see `.env.example`).
 | `PORT` / `HOST` | `8787` / `0.0.0.0` | Where the host listens. |
 | `INKSIDE_HOST_NAME` | the computer's name | Name shown in the app. |
 | `INKSIDE_STATE_DIR` | `~/.config/inkside-host` | The host's id and name. |
-| `INKSIDE_OPEN` | off | `1` accepts devices from any network, without a token. Only on networks you fully trust. A set `BRIDGE_TOKEN` still applies. |
-| `BRIDGE_TOKEN` | — | An access token. When set, every request must carry it and the network rule no longer applies, so the host can be shared over the internet with whoever you give the token. It also makes the host **shared** (see [Sharing a computer](#sharing-a-computer)). The app has a field for it. Put TLS or Tailscale in front: the token travels in a header. |
+| `BRIDGE_TOKEN` | made on first start | The owner's access token. Unset, the host makes one and keeps it in `<state dir>/owner-token`. Setting it also makes the host **shared** (see [Sharing a computer](#sharing-a-computer)). Put TLS in front of a host on the internet: the token travels in a header. |
+| `INKSIDE_PUBLIC_URL` | — | Where devices reach the host (comma-separated, e.g. `https://inkside.example.com`). The access token carries it, so a device needs nothing else. Unset: this computer's addresses on its networks. |
 | `INKSIDE_SHARED` | on with a token | `0`: a token, but not shared (the token holder gets everything your user account has; only if the token is yours alone). `1`: shared without a token. |
 | `INKSIDE_FIXED_MODEL` | on when shared | `1`: the model and provider are yours to set; devices cannot change them (the app hides those settings). `0` lets devices pick on a shared host. |
 | `INKSIDE_SANDBOX_DOMAINS` | `pypi.org,files.pythonhosted.org` | Shared host: the only hosts the agent's commands and scripts may reach. Empty: none. |
 | `INKSIDE_DICTATION` | off when shared | Shared host: `1` turns dictation on. Audio is decoded by ffmpeg outside the sandbox, so it is off unless you choose it. |
 | `INKSIDE_MAX_RUNS` | `3` | Shared host: agent replies running at once; more get `429`. |
-| `INKSIDE_ALLOWED_HOSTS` | — | Extra host names (comma-separated) devices may use to address the host, besides IP addresses, `localhost`, the computer's name, `*.local` and `*.ts.net`. Needed only for requests let in without a token. |
-| `BRIDGE_TRUST_LOOPBACK` | off | With a token: `1` lets requests from this computer in without it. Leave it off behind a reverse proxy on the same computer, where every request looks local. |
 | `BRIDGE_USE_API_KEY` + `ANTHROPIC_API_KEY` | — | Use an API key instead of the `claude` login. |
 | `INKSIDE_IMPROVE` | off | Developer setup: `1` enables the `/improve` endpoints (an agent that edits this repository). Never on a shared host. |
 | `ADB_SERIAL` | — | Developer setup: where the Improve chat installs rebuilt APKs. |
@@ -111,7 +108,7 @@ location / {                        # or: location ^~ /inkside/ {
 
 The host may also run on another computer than the proxy, for example one reached through an
 SSH reverse tunnel (`ssh -N -R 127.0.0.1:3460:127.0.0.1:8787 proxy-host`, then `proxy_pass` to
-port 3460). Leave `BRIDGE_TRUST_LOOPBACK` off: through a proxy every request looks local.
+port 3460). Set `INKSIDE_PUBLIC_URL` to the proxy's address so the access token carries it.
 
 On Linux, install `bubblewrap` and `socat` first (`apt install bubblewrap socat`); the host
 warns at startup if they are missing.

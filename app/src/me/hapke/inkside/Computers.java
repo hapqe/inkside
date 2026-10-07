@@ -13,8 +13,8 @@ import java.util.List;
  * The remote side of the workspace: the tablet always holds the documents; a connected
  * computer holds a copy of them (kept in step by {@link RemoteSync}) and adds the agent,
  * scripts and voice. One computer at a time; disconnecting stops the sync and the agent, and
- * connecting again brings both back. A computer is connected by its address (same network),
- * plus an access token when its owner asks for one. Reaches shared state through {@code act}.
+ * connecting again brings both back. A computer is connected with nothing but an access
+ * token (see {@link HostLink#decode}). Reaches shared state through {@code act}.
  */
 final class Computers {
     private final MainActivity act;
@@ -104,31 +104,16 @@ final class Computers {
                 .show();
     }
 
-    /** Where an access token alone connects to: the Inkside test computer, over the internet. */
-    static final String TEST_COMPUTER_URL = "https://inkside.hapke.me";
-
-    /** An access token pasted where the address goes: long, and nothing like an address. */
-    private static boolean looksLikeToken(String s) {
-        return s.length() >= 20 && s.matches("[A-Za-z0-9_\\-]+") && !s.contains(".");
-    }
-
-    /**
-     * Asks for an access token and, for your own computer, its address. A token alone
-     * connects to the Inkside test computer over the internet — no address, no shared
-     * network or Tailscale needed.
-     */
+    /** Connecting is just an access token: from a tester's invite, or printed by your host. */
     void showConnect() {
         LinearLayout body = new LinearLayout(act);
         body.setOrientation(LinearLayout.VERTICAL);
-        body.addView(line("Got an access token? Enter it and connect: that is all a tester needs. "
-                + "For your own computer, also type the address its host shows.",
+        body.addView(line("Paste your access token. Testers get one from us; on your own computer "
+                + "the Inkside host prints one when it starts (or run npm run token).",
                 M3Dialog.onSurfaceVariant, 14));
         final android.widget.EditText token = field("Access token",
                 android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        final android.widget.EditText address = field("Computer address (optional)",
-                android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
         body.addView(token, fieldLp());
-        body.addView(address, fieldLp());
         TextView status = line("", M3Dialog.onSurfaceVariant, 13);
         LinearLayout row = new LinearLayout(act);
         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -140,20 +125,13 @@ final class Computers {
         body.addView(row, rlp);
         final M3Dialog[] dialog = new M3Dialog[1];
         View.OnClickListener go = v -> {
-            String a = address.getText().toString().trim();
             String t = token.getText().toString().trim();
-            // A token pasted into the address field: it is a token.
-            if (t.isEmpty() && looksLikeToken(a)) {
-                t = a;
-                a = "";
-            }
-            if (a.isEmpty() && t.isEmpty()) {
-                status.setText("Enter your access token.");
+            if (t.isEmpty()) {
+                status.setText("Paste your access token.");
                 return;
             }
-            if (a.isEmpty()) a = TEST_COMPUTER_URL;
             status.setText("Connecting\u2026");
-            HostLink.connect(act, a, t, new HostLink.Result<PairedHosts.Host>() {
+            HostLink.connect(act, t, new HostLink.Result<PairedHosts.Host>() {
                 @Override
                 public void onSuccess(PairedHosts.Host host) {
                     if (dialog[0] != null) dialog[0].dismiss();
@@ -173,10 +151,6 @@ final class Computers {
                 .setNegativeButton("Cancel", null)
                 .show();
         token.setOnEditorActionListener((v, actionId, e) -> {
-            go.onClick(v);
-            return true;
-        });
-        address.setOnEditorActionListener((v, actionId, e) -> {
             go.onClick(v);
             return true;
         });

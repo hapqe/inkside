@@ -5,7 +5,8 @@
  * re-read when it changes — no restart needed).
  *
  *   npm run testers -- list                       [--state DIR]
- *   npm run testers -- add <name>                 prints the new token
+ *   npm run testers -- add <name> [--url URL]     prints the new access token (with the
+ *                                                 host's address packed in when given)
  *   npm run testers -- remove <name>
  *
  * The state directory is INKSIDE_STATE_DIR, else ~/.config/inkside-host (as the host).
@@ -61,7 +62,15 @@ if (cmd === "add") {
   const token = crypto.randomBytes(24).toString("base64url");
   list.push({ name: n, token, createdAt: new Date().toISOString() });
   save(list);
-  console.log(token);
+  // With --url (where this host is reached) the app needs nothing else: a connection
+  // token. Without, the plain token is for the Inkside test computer.
+  const url = flag("--url") || process.env.INKSIDE_PUBLIC_URL;
+  if (url) {
+    const { encodeConnectToken } = await import("../src/connectToken.mjs");
+    console.log(encodeConnectToken(token, String(url).split(",")));
+  } else {
+    console.log(token);
+  }
 } else if (cmd === "remove") {
   const next = list.filter((t) => t.name !== name);
   if (next.length === list.length) {

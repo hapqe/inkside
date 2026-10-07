@@ -15,7 +15,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isSameNetwork } from "../src/network.mjs";
+import { encodeConnectToken, decodeConnectToken } from "../src/connectToken.mjs";
 import { createAuth } from "../src/auth.mjs";
 import { LearningStore } from "../src/learning.mjs";
 
@@ -40,6 +40,18 @@ function check(name, ok, detail = "") {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** The test host's own access token (it makes one on first start); sent on every request. */
+let MAIN_TOKEN = "";
+const rawFetch = globalThis.fetch;
+globalThis.fetch = (url, init = {}) => {
+  if (MAIN_TOKEN && String(url).startsWith(BASE)) {
+    const headers = new Headers(init.headers || {});
+    if (!headers.has("authorization")) headers.set("authorization", `Bearer ${MAIN_TOKEN}`);
+    init = { ...init, headers };
+  }
+  return rawFetch(url, init);
+};
+
 async function json(method, route, body) {
   const res = await fetch(BASE + route, {
     method,
@@ -58,7 +70,8 @@ async function json(method, route, body) {
 /** A request with headers fetch() will not send (Host). */
 function rawRequest(port, { method = "GET", path: p = "/", headers = {} } = {}) {
   return new Promise((resolve, reject) => {
-    const req = http.request({ host: "127.0.0.1", port, method, path: p, headers }, (res) => {
+    const all = { ...(MAIN_TOKEN && port === PORT ? { Authorization: `Bearer ${MAIN_TOKEN}` } : {}), ...headers };
+    const req = http.request({ host: "127.0.0.1", port, method, path: p, headers: all }, (res) => {
       let body = "";
       res.on("data", (d) => (body += d));
       res.on("end", () => resolve({ status: res.statusCode, body }));
@@ -140,6 +153,10 @@ async function main() {
       await sleep(250);
     }
     if (!up) throw new Error(`bridge did not start:\n${logs.join("")}`);
+    MAIN_TOKEN = (await fsp.readFile(path.join(ws, ".host-state", "owner-token"), "utf8")).trim();
+    check("a host without BRIDGE_TOKEN makes its own access token", MAIN_TOKEN.length >= 16);
+    check("and it is required, even from this computer",
+      (await rawFetch(BASE + "/files?path=.")).status === 401);
 
     console.log("health");
     const health = await json("GET", "/health");
@@ -828,49 +845,30 @@ async function main() {
 
     const fromPage = await rawRequest(PORT, { path: "/files", headers: { Origin: "https://evil.example" } });
     check("requests from web pages are refused", fromPage.status === 403);
-    const rebind = await rawRequest(PORT, { path: "/files", headers: { Host: `attacker.example:${PORT}` } });
-    check("a DNS-rebinding host name is refused", rebind.status === 403);
     await fsp.rm(outsideDir, { recursive: true, force: true });
 
-    console.log("\nsame network only");
-    const ifaces = {
-      en0: [{ family: "IPv4", address: "192.168.1.20", cidr: "192.168.1.20/24" }],
-      utun4: [{ family: "IPv4", address: "100.64.0.10", cidr: "100.64.0.10/32" }],
-    };
-    check("a device on the same Wi-Fi is local", isSameNetwork("192.168.1.55", ifaces));
-    check("another subnet is not", !isSameNetwork("192.168.2.5", ifaces));
-    check("the internet is not", !isSameNetwork("8.8.8.8", ifaces));
-    check("the same tailnet is local", isSameNetwork("100.64.0.20", ifaces));
-    check("a tailnet this computer is not on is not",
-      !isSameNetwork("100.64.0.20", { en0: ifaces.en0 }));
-    check("loopback is local", isSameNetwork("127.0.0.1", {}));
-    const guard = createAuth({ sameNetwork: (a) => a === "192.168.1.55" });
-    const probe = (addr, p = "/files") => {
-      let status = 200;
-      const res = { setHeader() {}, status(c) { status = c; return this; }, json() { return this; } };
-      let passed = false;
-      guard.middleware({ method: "GET", path: p, headers: {}, socket: { remoteAddress: addr } }, res,
-        () => { passed = true; });
-      return passed ? 200 : status;
-    };
-    check("same-network request passes", probe("::ffff:192.168.1.55") === 200);
-    check("other network is refused with 403", probe("203.0.113.9") === 403);
-    check("health stays reachable from elsewhere", probe("203.0.113.9", "/health") === 200);
-    const tokGuard = createAuth({ token: "t0k3n", sameNetwork: () => false });
-    const tokProbe = (addr, headers) => {
+    console.log("\naccess tokens only");
+    const tokGuard = createAuth({ token: "t0k3n-0123456789abcdef" });
+    const tokProbe = (addr, headers, p = "/files") => {
       let passed = false, status = 200;
       const res = { setHeader() {}, status(c) { status = c; return this; }, json() { return this; } };
-      tokGuard.middleware({ method: "GET", path: "/files", headers, socket: { remoteAddress: addr } }, res, () => { passed = true; });
+      tokGuard.middleware({ method: "GET", path: p, headers, socket: { remoteAddress: addr } }, res, () => { passed = true; });
       return passed ? 200 : status;
     };
-    check("an access token works from any network", tokProbe("203.0.113.9", { authorization: "Bearer t0k3n" }) === 200);
-    check("without it, even this computer's network is refused", tokProbe("192.168.1.5", {}) === 401);
-    check("this computer itself needs the token too (a local proxy looks local)", tokProbe("127.0.0.1", {}) === 401);
+    check("an access token works from any network", tokProbe("203.0.113.9", { authorization: "Bearer t0k3n-0123456789abcdef" }) === 200);
+    check("without it, the same Wi-Fi is refused", tokProbe("192.168.1.5", {}) === 401);
+    check("without it, this computer is refused", tokProbe("127.0.0.1", {}) === 401);
+    check("health stays reachable without it", tokProbe("203.0.113.9", {}, "/health") === 200);
+    const conn = encodeConnectToken("abc-token", ["https://example.org/inkside"]);
+    const decoded = decodeConnectToken(conn);
+    check("a connection token carries the host's address and token",
+      conn.startsWith("ink1.") && decoded.token === "abc-token" && decoded.urls[0] === "https://example.org/inkside");
+    check("a plain token decodes as just a token", decodeConnectToken("plain-token").urls.length === 0);
     // Testers' own tokens: each one admitted under its name; the owner's token is "owner".
     const tdir = await fsp.mkdtemp(path.join(os.tmpdir(), "cc-testers-"));
     const tfile = path.join(tdir, "tokens.json");
     await fsp.writeFile(tfile, JSON.stringify({ testers: [{ name: "anna", token: "anna-token-0123456789" }] }));
-    const testerGuard = createAuth({ token: "owner-token-0123456789", tokensFile: tfile, sameNetwork: () => false });
+    const testerGuard = createAuth({ token: "owner-token-0123456789", tokensFile: tfile });
     const who = (tok) => {
       const req = { headers: tok ? { authorization: `Bearer ${tok}` } : {}, socket: { remoteAddress: "203.0.113.9" } };
       return testerGuard.refusal(req) === null ? req.tester : null;
@@ -878,8 +876,9 @@ async function main() {
     check("a tester's token is let in under their name", who("anna-token-0123456789") === "anna");
     check("the owner's token is the owner", who("owner-token-0123456789") === "owner");
     check("an unknown token is refused", who("nobody-token-0123456789") === null && who(null) === null);
-    const onlyTesters = createAuth({ tokensFile: tfile, sameNetwork: () => true });
-    check("testers alone make tokens required", onlyTesters.tokenRequired
+    const onlyTesters = createAuth({ tokensFile: tfile });
+    check("a tester's token works without an owner token, and nothing works without one",
+      onlyTesters.refusal({ headers: { authorization: "Bearer anna-token-0123456789" }, socket: {} }) === null
       && onlyTesters.refusal({ headers: {}, socket: { remoteAddress: "192.168.1.5" } }) === "token");
     const U = await import("../src/usage.mjs");
     const ulog = new U.UsageLog(tdir);
@@ -891,22 +890,14 @@ async function main() {
     check("usage is summed per tester", usage.length === 1 && usage[0].tester === "anna"
       && usage[0].runs === 2 && usage[0].inputTokens === 110 && Math.abs(usage[0].costUsd - 0.012) < 1e-9);
     await fsp.rm(tdir, { recursive: true, force: true });
-    const loopGuard = createAuth({ token: "t0k3n", trustLoopback: true, sameNetwork: () => false });
-    let loopPassed = false;
-    loopGuard.middleware({ method: "GET", path: "/files", headers: {}, socket: { remoteAddress: "127.0.0.1" } },
-      { setHeader() {}, status() { return this; }, json() { return this; } }, () => { loopPassed = true; });
-    check("BRIDGE_TRUST_LOOPBACK=1 lets this computer in without it", loopPassed);
-    const httpGuard = createAuth({ sameNetwork: () => true });
-    const why = (headers) => httpGuard.refusal({ headers, socket: { remoteAddress: "192.168.1.5" } });
-    check("a web page on another origin is refused", why({ host: "192.168.1.20:8787", origin: "https://evil.example" }) === "origin");
+    const httpGuard = createAuth({ token: "t0k3n-0123456789abcdef" });
+    const why = (headers) => httpGuard.refusal({
+      headers: { authorization: "Bearer t0k3n-0123456789abcdef", ...headers }, socket: { remoteAddress: "192.168.1.5" } });
+    check("a web page on another origin is refused, token or not", why({ host: "192.168.1.20:8787", origin: "https://evil.example" }) === "origin");
     check("an opaque origin is refused", why({ host: "192.168.1.20:8787", origin: "null" }) === "origin");
     check("the host's own origin is fine", why({ host: "192.168.1.20:8787", origin: "http://192.168.1.20:8787" }) === null);
-    check("a rebinding host name is refused", why({ host: "attacker.example:8787" }) === "host");
-    check("an address, localhost or a tailnet name is fine",
-      why({ host: "192.168.1.20:8787" }) === null && why({ host: "localhost:8787" }) === null
-      && why({ host: "box.tail1234.ts.net" }) === null);
 
-    console.log("\nauth (token set, loopback not trusted)");
+    console.log("\nshared host token");
     const AUTH_PORT = PORT + 1;
     const AUTH_BASE = `http://127.0.0.1:${AUTH_PORT}`;
     const authServer = spawn(process.execPath, [SERVER], {

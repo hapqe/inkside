@@ -1,6 +1,6 @@
 {
   "name": "inkside-host",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,7 +8,8 @@
     "dev": "node --watch src/server.mjs",
     "test": "node scripts/test_bridge.mjs",
     "testers": "node scripts/testers.mjs",
-    "usage": "node scripts/usage.mjs"
+    "usage": "node scripts/usage.mjs",
+    "token": "node scripts/token.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.280",

@@ -18,6 +18,7 @@ import { UsageLog } from "./usage.mjs";
 import { createAuth } from "./auth.mjs";
 import { HostIdentity } from "./identity.mjs";
 import { reachableAddresses } from "./network.mjs";
+import { encodeConnectToken } from "./connectToken.mjs";
 import { CaptureBroker, createCanvasMcpServer, parsePageSpec } from "./canvasTool.mjs";
 import { flattenPdf, reorderPdf } from "./pdfTools.mjs";
 import { PdfIndex } from "./pdfIndex.mjs";
@@ -383,17 +384,46 @@ const identity = new HostIdentity({
   name: process.env.INKSIDE_HOST_NAME || "",
 }).init();
 
-// Only devices on this computer's own network may connect (see auth.mjs).
+/**
+ * The owner's access token: BRIDGE_TOKEN, or one this host made on its first start and
+ * keeps in its state directory. Every device needs a token; there is no other way in.
+ */
+function ownerToken() {
+  const fromEnv = String(process.env.BRIDGE_TOKEN || "").trim();
+  if (fromEnv) return fromEnv;
+  const file = path.join(STATE_DIR, "owner-token");
+  try {
+    const saved = fs.readFileSync(file, "utf8").trim();
+    if (saved.length >= 16) return saved;
+  } catch {
+    /* first start */
+  }
+  const made = crypto.randomBytes(24).toString("base64url");
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  fs.writeFileSync(file, made + "\n", { mode: 0o600 });
+  return made;
+}
+const OWNER_TOKEN = ownerToken();
+
+/**
+ * Where devices reach this host, packed into the connection token so a device needs
+ * nothing but the token: INKSIDE_PUBLIC_URL (comma-separated, e.g. behind a TLS proxy),
+ * else this computer's addresses on its networks.
+ */
+function connectUrls() {
+  const pub = String(process.env.INKSIDE_PUBLIC_URL || "")
+    .split(",").map((u) => u.trim()).filter(Boolean);
+  if (pub.length) return pub;
+  if (/^(127\.|localhost$|::1$)/.test(HOST)) return [];
+  return reachableAddresses().map((a) => `http://${a}:${PORT}`);
+}
+
 const auth = createAuth({
-  token: process.env.BRIDGE_TOKEN || "",
+  token: OWNER_TOKEN,
   // Testers' own tokens (scripts/testers.mjs), so each one's use can be told apart.
   tokensFile: process.env.INKSIDE_TOKENS_FILE || path.join(STATE_DIR, "tokens.json"),
-  open: process.env.INKSIDE_OPEN === "1",
-  // With a token, this computer's own requests need it too unless this is "1".
-  trustLoopback: process.env.BRIDGE_TRUST_LOOPBACK === "1",
   // Maths assets for artifact pages carry nothing private.
   publicPaths: ["/katex"],
-  allowedHosts: String(process.env.INKSIDE_ALLOWED_HOSTS || "").split(","),
 });
 
 const app = express();
@@ -2092,7 +2122,7 @@ app.get("/health", (req, res) => {
     hostId: identity.hostId,
     name: identity.name,
     uptimeSec: Math.round((Date.now() - STARTED_AT) / 1000),
-    authRequired: auth.tokenRequired || !auth.open,
+    authRequired: true,
     authenticated: true,
     shared: SHARED,
     backend: "claude-agent-sdk",
@@ -4374,7 +4404,7 @@ const httpServer = app.listen(PORT, HOST, () => {
   console.log(`study store: ${studyStore.root}`);
   console.log(`session map: ${sessionMap.size} chat(s)`);
   console.log(`chat sessions: ${chatSessions.size} restored`);
-  console.log(`host v${BRIDGE_VERSION} · "${identity.name}" · ${auth.tokenRequired ? "BRIDGE_TOKEN required" : auth.open ? "OPEN to any network (INKSIDE_OPEN=1)" : "devices on this computer's network only"}`);
+  console.log(`host v${BRIDGE_VERSION} · "${identity.name}" · access token required`);
   if (SHARED) {
     console.log(`shared: agent and scripts sandboxed · network for them: ${SANDBOX_DOMAINS.join(", ") || "none"} · up to ${MAX_SHARED_RUNS} runs at once`);
     if (process.platform === "linux") {
@@ -4386,15 +4416,16 @@ const httpServer = app.listen(PORT, HOST, () => {
         }
       }
     }
-  } else if (auth.tokenRequired) {
+  } else if (String(process.env.BRIDGE_TOKEN || "").trim()) {
     console.warn("INKSIDE_SHARED=0: the token holder gets everything this computer's user has. Only do this if the token is yours alone.");
   }
   if (IMPROVE_ENABLED) console.log("improve: on (INKSIDE_IMPROVE=1) — devices can have an agent change this repository");
-  if (/^(127\.|localhost$|::1$)/.test(HOST)) {
-    console.log(`listening on this computer only (${HOST}:${PORT}): devices reach it through your proxy's address`);
+  // All a device needs: the access token, with where to find this host packed in.
+  const urls = connectUrls();
+  if (urls.length) {
+    console.log(`connect from the tablet: ⋮ → Connect a computer, then paste this access token:\n  ${encodeConnectToken(OWNER_TOKEN, urls)}`);
   } else {
-    const addrs = reachableAddresses();
-    console.log(`connect from the tablet: ⋮ → Connect a computer, then enter ${addrs.length ? addrs.join(" or ") : "this computer's IP address"}${PORT === 8787 ? "" : `:${PORT}`}`);
+    console.log("listening on this computer only: set INKSIDE_PUBLIC_URL to the address your proxy serves, so the access token can carry it (npm run token)");
   }
   // Index the PDFs for search once things have settled.
   setTimeout(() => {

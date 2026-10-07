@@ -1,34 +1,22 @@
 /**
- * Who may use the host.
+ * Who may use the host: whoever presents an access token. Nothing else counts — not the
+ * network a device is on, not being this computer.
  *
- * The host can read, write and run things in the workspace, so it only answers
- * devices on a network this computer is on (see network.mjs): the tablet connects by
- * typing this computer's address, nothing more. INKSIDE_OPEN=1 lifts the network
- * check (only on networks you fully trust).
+ * The owner's token is BRIDGE_TOKEN, or one the host made itself on first start (kept in
+ * its state directory). Testers each have their own, from a tokens file (opts.tokensFile,
+ * JSON {"testers": [{"name", "token"}]}), so their use can be told apart (req.tester; the
+ * owner is "owner"). The file is re-read when it changes, so tokens can be added or
+ * revoked without a restart.
  *
- * BRIDGE_TOKEN is an access token: when it is set, every request must carry it and the
- * network no longer matters, so a computer reachable over the internet can be shared with
- * someone who was given the token. Put TLS (or Tailscale) in front of such a host: the
- * token travels in a header. Accepted as `Authorization: Bearer <token>`, `X-Bridge-Token`,
- * `?token=` (web views loading artifact pages; also sets a cookie) or the `cc_token`
- * cookie. Requests from this computer itself need it too unless BRIDGE_TRUST_LOOPBACK=1:
- * a reverse proxy on the same computer makes every request look local.
- *
- * Testers: a tokens file (opts.tokensFile, JSON {"testers": [{"name", "token"}]}) gives
- * each tester a token of their own, so their use can be told apart (req.tester). It is
- * re-read when it changes, so tokens can be added or revoked without a restart. The
- * owner's BRIDGE_TOKEN is "owner".
+ * A token is accepted as `Authorization: Bearer <token>`, `X-Bridge-Token`, `?token=`
+ * (web views loading artifact pages; this also sets a cookie) or the `cc_token` cookie.
+ * Put TLS in front of a host reachable from the internet: the token travels in a header.
  *
  * Browsers: a request carrying an Origin that is not this host's own is refused, so a web
- * page cannot drive the host from someone's browser. A request let in without a token
- * (same network, loopback, INKSIDE_OPEN) must also name the host by an address or a known
- * name, which stops DNS rebinding (a hostile name re-pointed at this computer).
+ * page cannot drive the host from someone's browser even with a token in a cookie.
  */
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
-import net from "node:net";
-import { clientAddress, isLoopback, isSameNetwork } from "./network.mjs";
 
 const COOKIE = "cc_token";
 
@@ -69,22 +57,13 @@ function cookiePath(req) {
   return /^\/[A-Za-z0-9._~\-/]*$/.test(prefix) ? prefix.replace(/\/+$/, "") || "/" : "/";
 }
 
-/** "host:port" / "[v6]:port" → bare lowercase host name or address. */
-function hostName(hostHeader) {
-  const h = String(hostHeader || "").trim().toLowerCase();
-  if (h.startsWith("[")) return h.slice(1, h.indexOf("]") > 0 ? h.indexOf("]") : undefined);
-  const i = h.lastIndexOf(":");
-  return i > 0 && h.indexOf(":") === i ? h.slice(0, i) : h;
-}
-
 /**
- * @param {{ token?: string, open?: boolean, trustLoopback?: boolean,
- *           publicPaths?: string[], sameNetwork?: (addr: string) => boolean,
- *           allowedHosts?: string[] }} opts
+ * @param {{ token?: string, tokensFile?: string, publicPaths?: string[] }} opts
  */
 export function createAuth(opts = {}) {
   const token = String(opts.token || "").trim();
   const tokensFile = opts.tokensFile ? String(opts.tokensFile) : "";
+  const publicPrefixes = opts.publicPaths || [];
   let testerCache = { at: 0, mtime: -1, list: [] };
 
   /** [{name, token}] from the tokens file, re-read when it changes (checked every 2s). */
@@ -105,40 +84,14 @@ export function createAuth(opts = {}) {
     try {
       const o = JSON.parse(fs.readFileSync(tokensFile, "utf8"));
       list = (Array.isArray(o?.testers) ? o.testers : [])
+        .filter((t) => !t?.disabled)
         .map((t) => ({ name: String(t?.name || "").trim(), token: String(t?.token || "").trim() }))
-        .filter((t) => t.name && t.token.length >= 16 && !t.disabled);
+        .filter((t) => t.name && t.token.length >= 16);
     } catch (e) {
       console.warn(`tokens file unreadable (${tokensFile}): ${e?.message || e}`);
     }
     testerCache = { at: now, mtime, list };
     return list;
-  }
-
-  /** Tokens are in force when the owner set one or any tester has one. */
-  function tokensInForce() {
-    return !!token || testers().length > 0;
-  }
-  const open = !!opts.open;
-  // With a token, loopback is not trusted unless asked for: behind a reverse proxy on
-  // this computer every request arrives from 127.0.0.1.
-  const trustLoopbackOpt = opts.trustLoopback === true;
-  const trustLoopback = () => (tokensInForce() ? trustLoopbackOpt : true);
-  const publicPrefixes = opts.publicPaths || [];
-  const sameNetwork = opts.sameNetwork || ((addr) => isSameNetwork(addr));
-  const machine = os.hostname().toLowerCase();
-  const knownHosts = new Set(
-    ["localhost", machine, machine.replace(/\.local$/, ""), `${machine.replace(/\.local$/, "")}.local`,
-      ...(opts.allowedHosts || []).map((h) => String(h).trim().toLowerCase()).filter(Boolean)]
-  );
-
-  /** A host name a rebinding attacker cannot control: an address, or a name we know. */
-  function hostAllowed(req) {
-    const raw = req.headers?.host;
-    if (!raw) return true; // not a browser
-    const name = hostName(raw);
-    if (net.isIP(name)) return true;
-    if (knownHosts.has(name)) return true;
-    return name.endsWith(".local") || name.endsWith(".ts.net");
   }
 
   /** An Origin from somewhere else: a web page trying to use the host. */
@@ -163,36 +116,22 @@ export function createAuth(opts = {}) {
     return null;
   }
 
-  /**
-   * "origin": a browser request from another site; "network": not on this computer's
-   * network; "token": BRIDGE_TOKEN missing or wrong; "host": let in without a token but
-   * addressed by a name we do not know (DNS rebinding).
-   */
+  /** "origin": a browser request from another site; "token": no valid access token. */
   function refusal(req) {
     if (crossOrigin(req)) return "origin";
-    const addr = clientAddress(req);
-    let admitted;
-    if (tokensInForce()) {
-      const p = presented(req);
-      if (p && token && safeEqual(p.value, token)) {
-        req.tester = "owner";
+    const p = presented(req);
+    if (!p) return "token";
+    if (token && safeEqual(p.value, token)) {
+      req.tester = "owner";
+      return null;
+    }
+    for (const t of testers()) {
+      if (safeEqual(p.value, t.token)) {
+        req.tester = t.name;
         return null;
       }
-      if (p) {
-        for (const t of testers()) {
-          if (safeEqual(p.value, t.token)) {
-            req.tester = t.name;
-            return null;
-          }
-        }
-      }
-      admitted = trustLoopback() && isLoopback(addr);
-      if (!admitted) return "token";
-    } else {
-      admitted = open || sameNetwork(addr);
-      if (!admitted) return "network";
     }
-    return hostAllowed(req) ? null : "host";
+    return "token";
   }
 
   /** True when this request may use the host. */
@@ -208,7 +147,7 @@ export function createAuth(opts = {}) {
     }
     const why = refusal(req);
     if (!why) {
-      const p = tokensInForce() ? presented(req) : null;
+      const p = presented(req);
       if (p && p.via === "query") {
         // Let the page's own relative requests (assets, fetches) authenticate too.
         res.setHeader(
@@ -218,27 +157,12 @@ export function createAuth(opts = {}) {
       }
       return next();
     }
-    if (why === "network") {
-      return res.status(403).json({ error: "this computer only accepts devices on its own network" });
-    }
     if (why === "origin") {
       return res.status(403).json({ error: "requests from web pages are not accepted" });
     }
-    if (why === "host") {
-      return res.status(403).json({ error: "unknown host name — use this computer's address, or add the name to INKSIDE_ALLOWED_HOSTS" });
-    }
     res.setHeader("WWW-Authenticate", 'Bearer realm="inkside-host"');
-    return res.status(401).json({ error: "unauthorized — this host requires BRIDGE_TOKEN" });
+    return res.status(401).json({ error: "unauthorized — this host requires an access token" });
   }
 
-  return {
-    get tokenRequired() {
-      return tokensInForce();
-    },
-    open,
-    isAuthed,
-    refusal,
-    middleware,
-    testers,
-  };
+  return { tokenRequired: true, isAuthed, refusal, middleware, testers };
 }
