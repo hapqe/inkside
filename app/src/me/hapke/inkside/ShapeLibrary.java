@@ -161,31 +161,21 @@ final class ShapeLibrary {
                 p.addOval(new RectF(0.25f, 0.25f, 0.75f, 0.75f), Path.Direction.CW);
                 break;
             case CYLINDER: {
-                // Body with the top ellipse drawn in full and the bottom one half.
-                p.addOval(new RectF(0f, 0f, 1f, 0.24f), Path.Direction.CW);
+                // The silhouette: the body with a round top and bottom. The rim of the
+                // top is a detail line (see detailPath), so the fill is never cut by it.
                 Path body = new Path();
                 body.moveTo(0f, 0.12f);
                 body.lineTo(0f, 0.88f);
                 body.arcTo(new RectF(0f, 0.76f, 1f, 1f), 180f, -180f, false);
                 body.lineTo(1f, 0.12f);
-                body.arcTo(new RectF(0f, 0f, 1f, 0.24f), 0f, 180f, false);
+                body.arcTo(new RectF(0f, 0f, 1f, 0.24f), 0f, -180f, false);
                 body.close();
-                Path all = new Path();
-                all.op(body, p, Path.Op.UNION);
-                p.set(all);
-                // The front rim of the top, as a line.
-                p.moveTo(0f, 0.12f);
-                p.arcTo(new RectF(0f, 0f, 1f, 0.24f), 180f, -180f, false);
+                p.set(body);
                 break;
             }
             case CUBE:
+                // The silhouette only; the front face's edges are detail lines.
                 poly(p, 0f, 0.25f, 0.25f, 0f, 1f, 0f, 1f, 0.75f, 0.75f, 1f, 0f, 1f);
-                // The front face's top and right edges.
-                p.moveTo(0f, 0.25f);
-                p.lineTo(0.75f, 0.25f);
-                p.lineTo(1f, 0f);
-                p.moveTo(0.75f, 0.25f);
-                p.lineTo(0.75f, 1f);
                 break;
             case CHECK:
                 p.moveTo(0f, 0.55f);
@@ -202,6 +192,32 @@ final class ShapeLibrary {
                 p.addRect(0f, 0f, 1f, 1f, Path.Direction.CW);
         }
         return p;
+    }
+
+    /**
+     * Lines drawn inside a shape's outline (a cylinder's top rim, a cube's front edges):
+     * stroked with the border, never filled. Null for shapes without any.
+     */
+    static Path detailPath(int kind) {
+        switch (clamp(kind)) {
+            case CYLINDER: {
+                Path d = new Path();
+                // The front half of the top ellipse.
+                d.addArc(new RectF(0f, 0f, 1f, 0.24f), 0f, 180f);
+                return d;
+            }
+            case CUBE: {
+                Path d = new Path();
+                d.moveTo(0f, 0.25f);
+                d.lineTo(0.75f, 0.25f);
+                d.lineTo(1f, 0f);
+                d.moveTo(0.75f, 0.25f);
+                d.lineTo(0.75f, 1f);
+                return d;
+            }
+            default:
+                return null;
+        }
     }
 
     private static void poly(Path p, float... xy) {

@@ -87,6 +87,10 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
     static final int REQ_PICK_ATTACHMENT = 1001;
     /** Role the files being picked for the chat get: "", "reference" or "goal". */
     String pendingAttachRole = "";
+    /** Chat + menu toggles: the role uploaded files get ("", "reference" or "goal"). */
+    String attachRoleMode = "";
+    /** Chat + menu toggle: messages ask for an interactive visualization while on. */
+    boolean visualizeMode;
     static final String DROP_TEXT_LABEL = "codingcanvas-text";
     /** The connected computer's host (agent, scripts, voice); talks to nothing on the tablet's own workspace. */
     BridgeClient bridge;
@@ -333,8 +337,6 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
     static final int CHAT_RESIZE_PILL_W = 4;
     static final int CHAT_RESIZE_PILL_H = 28;
     /** Inset around chat content; bottom and side must match so the composer sits evenly. */
-    /** Gap kept between the chat composer and the gesture pill while typing (dp). */
-    private static final int CHAT_IME_PILL_CLEARANCE = 24;
     static final int CHAT_CONTENT_INSET = 6;
     /** Composer pill radius (~half of min height) + inset → concentric with the shell. */
     static final int CHAT_COMPOSER_MIN_H = 48;
@@ -404,6 +406,9 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
     int writingBrush = CodeCanvasView.BRUSH_INK;
     /** The shape tool: shape, fill (0 = none), border colour (0 = none) and border width. */
     int shapeKind = ShapeLibrary.RECTANGLE;
+    /** Line styles (CodeCanvasView.LINE_*): the pen's ink strokes, and shape borders. */
+    int lineStyle = CodeCanvasView.LINE_SOLID;
+    int shapeDash = CodeCanvasView.LINE_SOLID;
     int shapeFill = 0;
     int shapeBorder = 0xFF4C8DFF;
     float shapeBorderWidth = 3f;
@@ -456,7 +461,7 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
     private FrameLayout toolFrame;
     private FrameLayout.LayoutParams navFrameLp;
     private GradientDrawable toolPillBg;
-    String appThemeId = "matcha";
+    String appThemeId = ThemeConfig.APP_THEMES[0].id;
     String codeStyleId = "material";
     boolean chatOnLeft = true;
     ImageView textToolButton;
@@ -602,6 +607,7 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         rootLayout.setClipChildren(false);
         rootLayout.setClipToPadding(false);
         setContentView(rootLayout);
+        SketchStyle.watch(getWindow().getDecorView());
         rootLayout.getViewTreeObserver().addOnGlobalLayoutListener(this::scheduleHoverSweep);
         // Every window that opens over the app (settings, menus, pickers, dialogs built
         // in-app) fades in with its card rising into place.
@@ -614,15 +620,7 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
             @Override
             public void onChildViewRemoved(View parent, View child) {}
         });
-        rootLayout.setOnApplyWindowInsetsListener((v, insets) -> {
-            onImeInsetsChanged(insets);
-            return insets;
-        });
-        // Insets can land before the resize for the keyboard has been laid out;
-        // re-measure once the root has its new size.
-        rootLayout.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
-            if (b - t != ob - ot) v.post(() -> onImeInsetsChanged(v.getRootWindowInsets()));
-        });
+        KeyboardInsets.follow(rootLayout, this::onKeyboardOverlap);
         latexRenderer = new LatexRenderer(this);
         latexRenderer.init(rootLayout);
         refreshRate.startRefreshRateKeepalive();
@@ -864,43 +862,39 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         });
     }
 
-    /** Extra bottom inset currently applied to the chat column for the keyboard. */
-    private int chatImeLiftPx = 0;
+    /** How much of the screen's bottom the keyboard covers right now (0 when it is away). */
+    int keyboardOverlapPx = 0;
+    /** Panels with a text field, kept clear of the keyboard: {overlay, card}. */
+    private final java.util.List<View[]> keyboardPanels = new java.util.ArrayList<>();
 
     /**
-     * With the keyboard up, the system gesture pill sits over the bottom of the
-     * composer, so only its upper half took taps. Lift the composer clear of the
-     * keyboard and the pill by padding the chat column — the message list above
-     * gets shorter instead of the whole panel sliding up and losing its top.
+     * The keyboard moved (called every frame while it slides). Whatever takes text sits right
+     * on top of it, the same distance above it as from the screen's edge without it: the chat
+     * composer, panels with a text field, and the instant chat.
      */
-    private void onImeInsetsChanged(WindowInsets insets) {
-        if (insets == null || rootLayout == null) return;
-        int lift = 0;
-        if (insets.isVisible(WindowInsets.Type.ime())) {
-            int imeBottom = insets.getInsets(WindowInsets.Type.ime()).bottom;
-            // Whether or not the window was resized for the keyboard, find how much of
-            // the panel still sits under it (0 when the window already shrank).
-            // Window metrics are the activity's full frame (the IME inset is measured
-            // against it) even when adjustResize has shrunk the view hierarchy.
-            int windowBottom = getWindowManager().getCurrentWindowMetrics().getBounds().bottom;
-            int[] loc = new int[2];
-            rootLayout.getLocationOnScreen(loc);
-            int rootBottom = loc[1] + rootLayout.getHeight();
-            int imeTop = windowBottom - imeBottom;
-            int overlap = Math.max(0, rootBottom - imeTop);
-            int pill = Math.max(
-                    insets.getInsetsIgnoringVisibility(WindowInsets.Type.navigationBars()).bottom,
-                    insets.getInsets(WindowInsets.Type.mandatorySystemGestures()).bottom);
-            lift = overlap + Math.max(dp(CHAT_IME_PILL_CLEARANCE), pill);
+    private void onKeyboardOverlap(int px) {
+        keyboardOverlapPx = px;
+        if (chatContentCol != null) {
+            chatContentCol.setPadding(chatContentCol.getPaddingLeft(), chatContentCol.getPaddingTop(),
+                    chatContentCol.getPaddingRight(), dp(CHAT_CONTENT_INSET) + px);
         }
-        applyChatImeLift(lift);
+        // Panels leave the list when they are detached.
+        for (View[] p : new java.util.ArrayList<>(keyboardPanels)) fitPanelAboveKeyboard(p[0], p[1]);
+        if (miniChat != null) miniChat.setKeyboardOverlap(px);
     }
 
-    private void applyChatImeLift(int lift) {
-        if (lift == chatImeLiftPx || chatContentCol == null) return;
-        chatImeLiftPx = lift;
-        chatContentCol.setPadding(chatContentCol.getPaddingLeft(), chatContentCol.getPaddingTop(),
-                chatContentCol.getPaddingRight(), dp(CHAT_CONTENT_INSET) + lift);
+    /** A centred panel card moves up and, when it must, gets shorter to clear the keyboard. */
+    private void fitPanelAboveKeyboard(View overlay, View card) {
+        overlay.setPadding(0, 0, 0, keyboardOverlapPx);
+        Object base = card.getTag(R.id.panel_base_height);
+        if (!(base instanceof Integer) || !(card.getLayoutParams() instanceof FrameLayout.LayoutParams)) return;
+        int room = rootLayout.getHeight() - keyboardOverlapPx - dp(SPACE_LG) * 2;
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) card.getLayoutParams();
+        int h = keyboardOverlapPx > 0 ? Math.min((Integer) base, Math.max(dp(160), room)) : (Integer) base;
+        if (lp.height != h) {
+            lp.height = h;
+            card.setLayoutParams(lp);
+        }
     }
 
     int statusBarHeight() {
@@ -1133,7 +1127,7 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         toolPillBg.setCornerRadius(dp(TOOL_PILL_RADIUS));
         toolPillBg.setColor(M3_SURFACE_CONTAINER_HIGH | 0xFF000000);
         pill.setBackground(toolPillBg);
-        pill.setElevation(dp(4));
+        SketchStyle.elevate(pill, 4);
         // Don't clip the expand chevron / selected icon rings against the pill edge.
         pill.setClipToOutline(false);
 
@@ -1185,8 +1179,9 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         navPillBg.setCornerRadius(dp(TOOL_PILL_RADIUS));
         navPillBg.setColor(M3_SURFACE_CONTAINER_HIGH | 0xFF000000);
         navPill.setBackground(navPillBg);
-        navPill.setElevation(dp(4));
+        SketchStyle.elevate(navPill, 4);
         navPill.setClipToOutline(false);
+        navPill.addOnLayoutChangeListener(pillResized);
         navPill.addView(projectsBackButton, iconLp());
         navPill.addView(quickSwitchButton, iconLp());
         navPill.addView(pagesButton, iconLp());
@@ -1377,6 +1372,7 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         LinearLayout.LayoutParams eLp = iconLp();
         eLp.setMargins(dp(SPACE_MD), 0, 0, 0);
         eraserOpts.addView(eraserSettingsButton, eLp);
+        penTools.stylePenSettingsButton();
         eraserOptions = eraserOpts;
         optionRow.addView(eraserOpts, targetLp);
 
@@ -1427,6 +1423,7 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         toolScrollLp.topMargin = statusBarHeight() + dp(SPACE_MD);
         frame.addView(toolScroll, toolScrollLp);
         frame.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> updateToolPillPosition());
+        pill.addOnLayoutChangeListener(pillResized);
         toolScroll.post(this::updateToolPillPosition);
 
         // Floating selection actions — anchored above lasso / selection.
@@ -1435,12 +1432,12 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         selectionActions.setGravity(Gravity.CENTER_VERTICAL);
         selectionActions.setPadding(dp(SPACE_SM), dp(SPACE_XS), dp(SPACE_SM), dp(SPACE_XS));
         selectionActions.setVisibility(View.GONE);
-        selectionActions.setElevation(dp(8));
         selectionActions.setClipToOutline(true);
         selectionActionsBg = new GradientDrawable();
         selectionActionsBg.setCornerRadius(dp(999));
         selectionActionsBg.setColor(M3_SURFACE_CONTAINER_HIGHEST);
         selectionActions.setBackground(selectionActionsBg);
+        SketchStyle.elevate(selectionActions, 8);
         addToChatButton = iconBtn(R.drawable.ic_add_chat, conversations::addSelectionScreenshotToChat);
         copySelButton = iconBtn(R.drawable.ic_copy, () -> {
             if (canvas != null) {
@@ -1510,7 +1507,7 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         textStyleScroll.setFillViewport(false);
         textStyleScroll.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
         textStyleScroll.setVisibility(View.GONE);
-        textStyleScroll.setElevation(dp(8));
+        SketchStyle.elevate(textStyleScroll, 8);
         textStyleInner = new LinearLayout(this);
         textStyleInner.setOrientation(LinearLayout.HORIZONTAL);
         textStyleInner.setGravity(Gravity.CENTER_VERTICAL);
@@ -1594,14 +1591,14 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         undoScrub = new UndoScrubView(this);
         undoScrub.setVisibility(View.GONE);
         // Above the tool bars and any overlay added to the frame later.
-        undoScrub.setElevation(dp(32));
+        SketchStyle.elevate(undoScrub, 32);
         undoScrubHost = frame;
         frame.addView(undoScrub, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         docSwitcher = new DocSwitcherView(this);
         docSwitcher.setVisibility(View.GONE);
-        docSwitcher.setElevation(dp(32));
+        SketchStyle.elevate(docSwitcher, 32);
         frame.addView(docSwitcher, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
@@ -1916,6 +1913,8 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
     void applyAppTheme(ThemeConfig.AppTheme theme) {
         if (theme == null) theme = ThemeConfig.APP_THEMES[0];
         appThemeId = theme.id;
+        SketchStyle.setTheme(theme);
+        if (rootLayout != null) SketchStyle.shadowTree(getWindow().getDecorView());
         try {
             getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                     .edit().putString("appThemeId", appThemeId).apply();
@@ -1941,17 +1940,26 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         if (navPillBg != null) {
             navPillBg.setColor(M3_SURFACE_CONTAINER_HIGH | 0xFF000000);
             navPillBg.setCornerRadius(dp(TOOL_PILL_RADIUS));
-            if (navPill != null) navPill.setBackground(navPillBg);
+            if (navPill != null) {
+                navPill.setBackground(navPillBg);
+                SketchStyle.elevate(navPill, 4);
+            }
         }
         if (toolPillBg != null) {
             toolPillBg.setColor(M3_SURFACE_CONTAINER_HIGH | 0xFF000000);
             toolPillBg.setCornerRadius(dp(TOOL_PILL_RADIUS));
-            if (toolPill != null) toolPill.setBackground(toolPillBg);
+            if (toolPill != null) {
+                toolPill.setBackground(toolPillBg);
+                SketchStyle.elevate(toolPill, 4);
+            }
         }
         if (selectionActionsBg != null) {
             selectionActionsBg.setColor(M3_SURFACE_CONTAINER_HIGHEST);
             selectionActionsBg.setCornerRadius(dp(999));
-            if (selectionActions != null) selectionActions.setBackground(selectionActionsBg);
+            if (selectionActions != null) {
+                selectionActions.setBackground(selectionActionsBg);
+                SketchStyle.elevate(selectionActions, 8);
+            }
         }
         if (chatPanel != null) {
             chatPanel.setBackgroundColor(0x00000000);
@@ -1974,7 +1982,10 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
             applyIconSelected(chatMoreFab, true);
             chatView.styleChatHeaderFabShadow(chatMoreFab);
         }
-        if (chatCanvasFab != null) applyIconSelected(chatCanvasFab, true);
+        if (chatCanvasFab != null) {
+            applyIconSelected(chatCanvasFab, true);
+            SketchStyle.elevate(chatCanvasFab, 12, ChatView.CHAT_FAB_SHADOW_DP);
+        }
         explorer.refreshExplorerPanelBackground();
         codeEditor.refreshEditorPanelBackground();
         codeEditor.refreshEditorChrome();
@@ -2019,6 +2030,7 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
             composerBg.setCornerRadius(dp(CHAT_COMPOSER_RADIUS));
             composerBg.setColor(M3_SURFACE_CONTAINER_HIGHEST);
             chatComposerShell.setBackground(composerBg);
+            SketchStyle.outline(chatComposerShell, 4);
         }
         if (chatWeb != null) {
             chatWeb.setBackgroundColor(0x00000000);
@@ -2035,6 +2047,7 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         tintSeekBar(textSizeBar);
         penTools.refreshSizeDots();
         penTools.refreshLassoChips();
+        penTools.applyOptionsTheme();
         for (View div : toolDividers) {
             if (div == null) continue;
             GradientDrawable d = new GradientDrawable();
@@ -2061,9 +2074,15 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         penTools.refreshToolSelection();
         conversations.refreshChatTabs();
         chatView.applyChatWebTheme(theme);
-        if (sendButton != null) applyIconSelected(sendButton, true);
-        if (stopButton != null) applyIconSelected(stopButton, true);
-        if (chatAttachButton != null) applyIconSelected(chatAttachButton, false);
+        if (sendButton != null) {
+            applyIconSelected(sendButton, true);
+            SketchStyle.outline(sendButton, 2);
+        }
+        if (stopButton != null) {
+            applyIconSelected(stopButton, true);
+            SketchStyle.outline(stopButton, 2);
+        }
+        conversations.refreshAttachButton();
         if (chatMicDiscardButton != null) applyIconSelected(chatMicDiscardButton, false);
         refreshHoverFeedback();
         if (chatVoiceWave != null) chatVoiceWave.setColor(M3_PRIMARY);
@@ -2216,7 +2235,7 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
             bg.setCornerRadius(dp(16));
             bg.setColor(M3_ON_SURFACE | 0xFF000000);
             v.setBackground(bg);
-            v.setElevation(dp(6));
+            SketchStyle.elevate(v, 6);
             v.setMaxWidth(dp(560));
             FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -2530,10 +2549,10 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
     final float[] eraserSizes = {14f, 28f, 56f};
     int eraserSlot = 1;
     View eraserOptions;
-    View eraserSettingsButton;
+    ImageView eraserSettingsButton;
     ImageView chipHl;
     ImageView chipText;
-    View lassoSettingsButton;
+    ImageView lassoSettingsButton;
     interface IntConsumer { void accept(int v); }
 
     private interface IdFn<T> { String id(T t); }
@@ -2626,6 +2645,14 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
     }
 
     /** Center tool pill in the free canvas strip; scroll when content is wider. */
+    /**
+     * Either top pill changing width moves where the other belongs; the pane itself does not
+     * change then, so its own layout listener does not fire.
+     */
+    private final View.OnLayoutChangeListener pillResized = (v, l, t, r, b, ol, ot, or, ob) -> {
+        if (r - l != or - ol) v.post(this::updateToolPillPosition);
+    };
+
     void updateToolPillPosition() {
         if (toolScroll == null || toolScrollLp == null || centerPane == null || toolPill == null) {
             return;
@@ -2674,15 +2701,14 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         int navRight = freeLeft;
         int navH = 0;
         if (navPill != null && navPill.getVisibility() == View.VISIBLE) {
-            int navW = navPill.getWidth();
-            navH = navPill.getHeight();
-            if (navW <= 0 || navH <= 0) {
-                navPill.measure(
-                        View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
-                        View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
-                navW = navPill.getMeasuredWidth();
-                navH = navPill.getMeasuredHeight();
-            }
+            // Measured as well as laid out: its laid-out width lags a change (a theme's border
+            // padding, a button shown) by a frame, and the old, narrower width let the tool
+            // pill sit right against it.
+            navPill.measure(
+                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+            int navW = Math.max(navPill.getMeasuredWidth(), navPill.getWidth());
+            navH = Math.max(navPill.getMeasuredHeight(), navPill.getHeight());
             navRight = freeLeft + navW + gap;
         }
         int besideW = freeRight - navRight;
@@ -2976,6 +3002,9 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
 
     float[] sidePanelCornerRadii(
             boolean onLeft, boolean roundCanvasEdge, boolean roundScreenEdge, float r) {
+        // On a phone a side panel covers the whole screen: square corners, so none show
+        // against the display's own rounded corners.
+        if (compactScreen()) r = 0f;
         float screen = roundScreenEdge ? r : 0f;
         float canvas = roundCanvasEdge ? r : 0f;
         if (onLeft) {
@@ -3389,6 +3418,10 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         GradientDrawable fillDot = new GradientDrawable();
         fillDot.setShape(GradientDrawable.OVAL);
         fillDot.setColor(fill);
+        // A thin ring in the bar's text colour, so every colour stands out on the bar —
+        // a dark ink on a dark theme, a pale one on a light theme.
+        fillDot.setStroke(Math.max(1, Math.round(getResources().getDisplayMetrics().density * 1.25f)),
+                (M3_ON_SURFACE & 0x00FFFFFF) | 0x8C000000);
         if (!selected) {
             v.setBackground(fillDot);
             if (Build.VERSION.SDK_INT >= 23) v.setForeground(null);
@@ -3602,7 +3635,7 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(SPACE_XL + 4), dp(SPACE_XL + 2), dp(SPACE_XL + 4), dp(SPACE_XL));
         settingsPanel.applyOptionsCardSurface(card);
-        card.setElevation(dp(6));
+        SketchStyle.elevate(card, 6);
         card.setClickable(true);
         int w = rootLayout.getWidth() > 0 ? rootLayout.getWidth() : getResources().getDisplayMetrics().widthPixels;
         int h = rootLayout.getHeight() > 0 ? rootLayout.getHeight() : getResources().getDisplayMetrics().heightPixels;
@@ -3612,7 +3645,15 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         overlay.addView(card, lp);
         overlay.setOnClickListener(v -> onOutsideTap.run());
         liftPanel(overlay);
-        return new View[] {overlay, card};
+        // Panels can take text (Search, …): keep the card above the keyboard.
+        card.setTag(R.id.panel_base_height, lp.height);
+        View[] panel = {overlay, card};
+        keyboardPanels.add(panel);
+        overlay.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
+            @Override public void onViewAttachedToWindow(View v) { fitPanelAboveKeyboard(overlay, card); }
+            @Override public void onViewDetachedFromWindow(View v) { keyboardPanels.remove(panel); }
+        });
+        return panel;
     }
 
     /** Dialog / panel title: M3 headline small, as in Settings, Export and Page style. */
@@ -3621,6 +3662,7 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
         title.setText(text);
         title.setTextColor(M3_ON_SURFACE);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
+        HeadlineFont.apply(title);
         return title;
     }
 

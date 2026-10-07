@@ -671,6 +671,16 @@ final class Conversations {
         return bos.toByteArray();
     }
 
+    /** The + button keeps its plain look; the toggles show their state in its menu. */
+    void refreshAttachButton() {
+        if (act.chatAttachButton == null) return;
+        act.applyIconSelected(act.chatAttachButton, false);
+    }
+
+    /** Asked of the agent, after the message, while the Visualization toggle is on. */
+    static final String VISUALIZE_ASK =
+            "\n\n(Answer this with an interactive visualization, embedded in the chat.)";
+
     void refreshAttachRow() {
         if (act.attachRow == null) return;
         act.attachRow.removeAllViews();
@@ -773,7 +783,8 @@ final class Conversations {
             appendChat("error", e.getMessage());
             return;
         }
-        final String sendMsg = msg;
+        // The chat shows the message as typed; the agent also gets the toggle's request.
+        final String sendMsg = act.visualizeMode && !msg.isEmpty() ? msg + VISUALIZE_ASK : msg;
         act.pendingAttachments.clear();
         refreshAttachRow();
 
@@ -786,7 +797,7 @@ final class Conversations {
             final String openPath = act.scriptEditorPath != null && !act.scriptEditorPath.isEmpty()
                     ? act.scriptEditorPath
                     : (act.openFile != null ? act.openFile : null);
-            maybeUpdateChatTitle(sendMsg);
+            maybeUpdateChatTitle(msg);
             // The agent works on the computer's copy: bring it up to date first.
             final String fChatId = chatId;
             final String fOpenPath = openPath;

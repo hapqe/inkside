@@ -85,10 +85,11 @@ final class InstantChat {
         if (created) {
             act.rootLayout.addView(act.miniChat, lp);
         } else {
-            act.miniChat.setTranslationX(0f);
-            act.miniChat.setTranslationY(0f);
             act.miniChat.setLayoutParams(lp);
+            act.miniChat.resetPosition();
         }
+        final MiniChatWindow shown = act.miniChat;
+        shown.post(() -> shown.setKeyboardOverlap(act.keyboardOverlapPx));
         ChatSession c = act.conversations.activeChat();
         act.miniChat.setTitle(c != null ? c.title : "Chat");
         act.miniChat.setListening(act.voiceRecorder != null);

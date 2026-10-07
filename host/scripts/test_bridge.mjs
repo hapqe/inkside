@@ -847,6 +847,12 @@ async function main() {
     check("requests from web pages are refused", fromPage.status === 403);
     await fsp.rm(outsideDir, { recursive: true, force: true });
 
+    const emptyWrite = await json("POST", "/file/write-binary", { path: "empty.viz", base64: "" });
+    check("an empty file syncs (empty base64 is a file, not a missing one)",
+      emptyWrite.status === 200 && (await fsp.stat(path.join(ws, "empty.viz"))).size === 0);
+    check("a missing body is still refused",
+      (await json("POST", "/file/write-binary", { path: "x.viz" })).status === 400);
+
     console.log("\naccess tokens only");
     const tokGuard = createAuth({ token: "t0k3n-0123456789abcdef" });
     const tokProbe = (addr, headers, p = "/files") => {

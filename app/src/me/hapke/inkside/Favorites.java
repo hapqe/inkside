@@ -45,7 +45,7 @@ final class Favorites {
     }
 
     /**
-     * Quick favorites menu (three-dot menu → Quick favorites): the on/off switch, the
+     * Quick favorites menu (⋮ → More → Quick favorites): the on/off switch, the
      * full-size radial to drag each favorite where the pen should find it, and the list
      * of favorites with a delete button each. Opens by itself when a favorite is added,
      * with {@code justAdded} called out so it is easy to place.
@@ -72,6 +72,7 @@ final class Favorites {
         title.setText("Quick favorites");
         title.setTextColor(act.M3_ON_SURFACE);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
+        HeadlineFont.apply(title);
         card.addView(title);
 
         card.addView(quickFavoritesSwitchRow());
@@ -157,7 +158,7 @@ final class Favorites {
         android.widget.ScrollView scroller = new android.widget.ScrollView(act);
         scroller.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
         scroller.setVerticalScrollBarEnabled(false);
-        scroller.setElevation(act.dp(8));
+        SketchStyle.elevate(scroller, 8);
         scroller.addView(card, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         // Rounded clip so the scrolled content respects the card corners.

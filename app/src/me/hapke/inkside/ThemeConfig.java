@@ -113,15 +113,41 @@ final class ThemeConfig {
     }
 
     /**
+     * Inkside Paper, Sage and Rose (the website's; Paper is the default), then
      * Moss, Ink, Rosé Pine (main / moon / dawn), Tokyo Night, Catppuccin Mocha,
      * GitHub Dark and Daylight, then Nord, Dracula, Gruvbox, One Dark, Solarized,
      * Kanagawa, Everforest, Ayu Mirage, Monokai Pro, Synthwave, Espresso, Midnight OLED
      * (dark) and Catppuccin Latte, GitHub Light, Solarized Light, Gruvbox Light,
-     * Everforest Light, Sakura and Mint (light). New themes go at the end: some code
-     * refers to the first ones by index.
+     * Everforest Light, Sakura and Mint (light). {@code APP_THEMES[0]} is the default
+     * wherever no theme is chosen; everything else refers to themes by id.
      * Legacy ids ({@code midnight}, {@code ink}, {@code tokenite}, …) map in {@link #appThemeById}.
      */
     static final AppTheme[] APP_THEMES = {
+            // The three website themes (inkside.hapke.me) come first, and Inkside Paper is the
+            // default: warm paper with navy ink and a blue accent, sage with a green one, rose
+            // with a pink one. They switch on the website's border-and-hard-shadow look
+            // (SketchStyle).
+            new AppTheme(
+                    "inkside-paper", "Inkside Paper", true,
+                    0xFFF5F1E8, 0xFFEFEADC, 0xE6ECE6D6, 0xFFDDD5C1,
+                    0xFF1B1F3B, 0xFF5A5E7A, 0xFF3B5BDB, 0xFFDBE4FF, 0xFF1A2C80,
+                    0xFFECE6D6, 0xFFCFC6AE, 0xFFEFEADC,
+                    0xFFDBE4FF, 0xFFECE6D6, 0xFFFFF3BF, 0xFFFFD8C2,
+                    codeLight("inkside-paper", 0xFFFFFDF7, 0xFF3B5BDB, 0xFF2B8A3E, 0xFFD9480F, 0xFF7C7F96, 0xFF1B1F3B)),
+            new AppTheme(
+                    "inkside-sage", "Inkside Sage", true,
+                    0xFFE8EFE3, 0xFFDFE8D9, 0xE6D9E4D1, 0xFFCBD8C1,
+                    0xFF1F3325, 0xFF526A58, 0xFF2B8A3E, 0xFFC3EBCB, 0xFF0E3A18,
+                    0xFFD9E4D1, 0xFFB9C9AE, 0xFFDFE8D9,
+                    0xFFCDEBD3, 0xFFD9E4D1, 0xFFF3EFB8, 0xFFF4D5B8,
+                    codeLight("inkside-sage", 0xFFF6FAF3, 0xFFC2410C, 0xFF2B8A3E, 0xFF1F6FB2, 0xFF7A8F7F, 0xFF1F3325)),
+            new AppTheme(
+                    "inkside-rose", "Inkside Rose", true,
+                    0xFFFBEEF0, 0xFFF7E5E9, 0xE6F4DDE2, 0xFFEACCD4,
+                    0xFF3A1A26, 0xFF7D5464, 0xFFD6336C, 0xFFFFD0DC, 0xFF5A0B2C,
+                    0xFFF4DDE2, 0xFFE0BFC9, 0xFFF7E5E9,
+                    0xFFFFD6E2, 0xFFF4DDE2, 0xFFFFF0C2, 0xFFF9CFCF,
+                    codeLight("inkside-rose", 0xFFFFF8F9, 0xFFD6336C, 0xFF2E7D5B, 0xFF7048E8, 0xFF9A7884, 0xFF3A1A26)),
             // Moss — deep green-black, mint accent (the reference: a saturated, deep
             // primaryContainer under a very light on-colour, so selected icons pop).
             new AppTheme(
@@ -370,13 +396,13 @@ final class ThemeConfig {
             }
             switch (id) {
                 case "tokenite":
-                    return APP_THEMES[1]; // ink
+                    return appThemeById("ink");
                 case "midnight":
-                    return APP_THEMES[2]; // rose-pine
+                    return appThemeById("rose-pine");
                 case "slate":
-                    return APP_THEMES[3]; // rose-pine-moon
+                    return appThemeById("rose-pine-moon");
                 case "paper":
-                    return APP_THEMES[4]; // rose-pine-dawn
+                    return appThemeById("rose-pine-dawn");
                 default:
                     break;
             }

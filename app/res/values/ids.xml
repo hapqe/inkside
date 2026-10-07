@@ -2,6 +2,11 @@
 <resources>
   <!-- Marks a placed element's WebView as loaded, so sizing passes do not reload it. -->
   <item name="art_loaded" type="id" />
+  <!-- SketchStyle: a raised view's own background, while the Inkside look wraps it. -->
+  <item name="sketch_plain_bg" type="id" />
+  <item name="sketch_plain_pad" type="id" />
+  <!-- A panel card's height before the keyboard shortened it. -->
+  <item name="panel_base_height" type="id" />
   <!-- Motion: the running expand/collapse animator on a view. -->
   <item name="motion_anim" type="id" />
   <!-- Motion: the running fade-in of a card that is popping in. -->

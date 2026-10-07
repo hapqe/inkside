@@ -58,7 +58,7 @@ final class SettingsPanel {
         // Shell: a pinned header over a scrolling list of grouped settings.
         LinearLayout shell = new LinearLayout(act);
         shell.setOrientation(LinearLayout.VERTICAL);
-        shell.setElevation(act.dp(6));
+        SketchStyle.elevate(shell, 6);
         shell.setClickable(true);
         // Don't dismiss when tapping inside the card.
         shell.setOnClickListener(v -> {});
@@ -317,7 +317,10 @@ final class SettingsPanel {
 
     /** Shell surface and header follow the theme, which can change while it is open. */
     private void refreshOptionsShell() {
-        if (optionsShell != null) applyOptionsCardSurface(optionsShell);
+        if (optionsShell != null) {
+            applyOptionsCardSurface(optionsShell);
+            SketchStyle.elevate(optionsShell, 6);
+        }
         LinearLayout header = optionsHeader;
         if (header == null) return;
         header.removeAllViews();
@@ -325,6 +328,7 @@ final class SettingsPanel {
         title.setText("Settings");
         title.setTextColor(act.M3_ON_SURFACE);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
+        HeadlineFont.apply(title);
         header.addView(title, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         ImageView close = new ImageView(act);

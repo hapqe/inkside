@@ -64,7 +64,7 @@ final class OverflowMenu {
         bg.setColor(act.M3_SURFACE_CONTAINER_HIGH | 0xFF000000);
         bg.setStroke(act.dp(1), (act.M3_OUTLINE_VARIANT & 0x00FFFFFF) | 0x55000000);
         menu.setBackground(bg);
-        menu.setElevation(act.dp(8));
+        SketchStyle.elevate(menu, 8);
         menu.setClickable(true);
         menu.setOnClickListener(v -> {});
         return menu;
@@ -98,6 +98,8 @@ final class OverflowMenu {
     /**
      * The ⋮ menu under {@code anchor}. From the All Projects library ({@code library})
      * it leaves out what needs an open document, and the way to the library itself.
+     * Kept short: related actions sit in submenus (Document, Learning, More), each opened
+     * in place of the main list with a row back at its top.
      */
     void showOverflowMenu(View anchor, boolean library) {
         if (overflowOverlay != null) {
@@ -113,87 +115,85 @@ final class OverflowMenu {
                 dismissOverflowMenu();
                 act.projects.showAllProjects();
             }));
-            addOverflowRow(menu, overflowItem(R.drawable.ic_palette, "Page styling", () -> {
-                dismissOverflowMenu();
-                act.pageStyle.showPageStyleMenu();
-            }));
+            addOverflowRow(menu, submenuItem(R.drawable.ic_pages, "Document",
+                    () -> showDocumentMenu(anchor)));
         }
-        addOverflowRow(menu, overflowItem(R.drawable.ic_star, "Quick favorites", () -> {
+        addOverflowRow(menu, submenuItem(R.drawable.ic_lightbulb, "Learning",
+                () -> showLearningMenu(anchor, library)));
+        addOverflowRow(menu, overflowItem(R.drawable.ic_delete, "Recently deleted", () -> {
             dismissOverflowMenu();
-            act.favorites.showFavoritesArranger();
+            TrashDialog.show(act);
         }));
-        if (!library) {
-            addOverflowRow(menu, overflowItem(R.drawable.ic_fullscreen, "Zen mode", () -> {
-                dismissOverflowMenu();
-                act.zen.enterZenMode();
-            }));
-            addOverflowRow(menu, overflowItem(R.drawable.ic_present,
-                    act.presentation != null ? "Stop presenting" : "Present", () -> {
-                dismissOverflowMenu();
-                act.slideshow.togglePresentation();
-            }));
-        }
-        if (!library && act.aiEnabled && act.computers.hasHost()
-                && act.canvas != null && act.canvas.hasDocument()) {
-            addOverflowRow(menu, overflowItem(R.drawable.ic_check_circle, "Check my work", () -> {
-                dismissOverflowMenu();
-                act.conversations.checkMyWork();
-            }));
-        }
-        addOverflowRow(menu, overflowItem(R.drawable.ic_lightbulb, "Learning", () -> {
-            removeOverlayNow();
-            showLearningMenu(anchor, library);
-        }));
-        if (!library && act.canvas != null && act.canvas.hasDocument()) {
-            addOverflowRow(menu, overflowItem(R.drawable.ic_download, "Export PDF", () -> {
-                dismissOverflowMenu();
-                act.pdfExport.exportCurrentPdf();
-            }));
-        }
         // App-level settings are a different kind of thing from the actions above.
         addMenuDivider(menu);
+        addOverflowRow(menu, overflowItem(R.drawable.ic_settings, "Settings", () -> {
+            dismissOverflowMenu();
+            act.settingsPanel.showOptionsMenu();
+        }));
         final PairedHosts.Host linked = PairedHosts.remote(act);
         addOverflowRow(menu, overflowItem(R.drawable.ic_link,
                 linked == null ? "Connect a computer" : "Remote: " + linked.name, () -> {
             dismissOverflowMenu();
             act.computers.showRemoteMenu();
         }));
-        addOverflowRow(menu, overflowItem(R.drawable.ic_delete, "Recently deleted", () -> {
-            dismissOverflowMenu();
-            TrashDialog.show(act);
-        }));
-        addOverflowRow(menu, overflowItem(R.drawable.ic_settings, "Settings", () -> {
-            dismissOverflowMenu();
-            act.settingsPanel.showOptionsMenu();
-        }));
-        // A separate test install has another package: releases update the real app only.
-        if ("me.hapke.inkside".equals(act.getPackageName())) {
-            addOverflowRow(menu, overflowItem(R.drawable.ic_sync, "Update", () -> {
-                dismissOverflowMenu();
-                act.updater.show();
-            }));
-        }
-        addOverflowRow(menu, overflowItem(R.drawable.ic_info, "About", () -> {
-            dismissOverflowMenu();
-            AboutDialog.show(act);
-        }));
+        addOverflowRow(menu, submenuItem(R.drawable.ic_more, "More",
+                () -> showMoreMenu(anchor, library)));
         showDropdownUnder(anchor, menu);
     }
 
-    /**
-     * ⋮ → Learning: what to study next (across every project), progress, the weekly
-     * goal and the study week, kept together so the main menu stays short.
-     */
-    private void showLearningMenu(View anchor, boolean library) {
-        if (act.rootLayout == null || anchor == null) return;
+    /** A submenu in place of the main list: a row back, a divider, then its rows. */
+    private LinearLayout openSubmenu(View anchor, boolean library, String title) {
+        removeOverlayNow();
         LinearLayout menu = buildDropdownMenu();
         menu.setPadding(act.dp(MainActivity.SPACE_MD), act.dp(MainActivity.SPACE_MD), act.dp(MainActivity.SPACE_MD), act.dp(MainActivity.SPACE_MD));
-        addOverflowRow(menu, overflowItem(R.drawable.ic_chevron_left, "Learning", () -> {
+        addOverflowRow(menu, overflowItem(R.drawable.ic_chevron_left, title, () -> {
             removeOverlayNow();
             showOverflowMenu(anchor, library);
         }));
         addMenuDivider(menu);
+        return menu;
+    }
+
+    /** ⋮ → Document: how the open document looks, is shown, and leaves the app. */
+    private void showDocumentMenu(View anchor) {
+        if (act.rootLayout == null || anchor == null) return;
+        LinearLayout menu = openSubmenu(anchor, false, "Document");
+        addOverflowRow(menu, overflowItem(R.drawable.ic_palette, "Page styling", () -> {
+            dismissOverflowMenu();
+            act.pageStyle.showPageStyleMenu();
+        }));
+        addOverflowRow(menu, overflowItem(R.drawable.ic_present,
+                act.presentation != null ? "Stop presenting" : "Present", () -> {
+            dismissOverflowMenu();
+            act.slideshow.togglePresentation();
+        }));
+        addOverflowRow(menu, overflowItem(R.drawable.ic_fullscreen, "Zen mode", () -> {
+            dismissOverflowMenu();
+            act.zen.enterZenMode();
+        }));
+        if (act.canvas != null && act.canvas.hasDocument()) {
+            addOverflowRow(menu, overflowItem(R.drawable.ic_download, "Export PDF", () -> {
+                dismissOverflowMenu();
+                act.pdfExport.exportCurrentPdf();
+            }));
+        }
+        showDropdownUnder(anchor, menu);
+    }
+
+    /**
+     * ⋮ → Learning: checking your work, what to study next (across every project),
+     * progress, the weekly goal and the study week.
+     */
+    private void showLearningMenu(View anchor, boolean library) {
+        if (act.rootLayout == null || anchor == null) return;
+        LinearLayout menu = openSubmenu(anchor, library, "Learning");
         boolean host = act.aiEnabled && act.computers.hasHost();
+        if (host && !library && act.canvas != null && act.canvas.hasDocument()) {
+            addOverflowRow(menu, overflowItem(R.drawable.ic_check_circle, "Check my work", () -> {
+                dismissOverflowMenu();
+                act.conversations.checkMyWork();
+            }));
+        }
         if (host) {
             addOverflowRow(menu, overflowItem(R.drawable.ic_bolt, "What to do next", () -> {
                 dismissOverflowMenu();
@@ -214,6 +214,28 @@ final class OverflowMenu {
         addOverflowRow(menu, overflowItem(R.drawable.ic_calendar, "Study week", () -> {
             dismissOverflowMenu();
             new StudyWeekDialog(act).show();
+        }));
+        showDropdownUnder(anchor, menu);
+    }
+
+    /** ⋮ → More: the rarely needed rest. */
+    private void showMoreMenu(View anchor, boolean library) {
+        if (act.rootLayout == null || anchor == null) return;
+        LinearLayout menu = openSubmenu(anchor, library, "More");
+        addOverflowRow(menu, overflowItem(R.drawable.ic_star, "Quick favorites", () -> {
+            dismissOverflowMenu();
+            act.favorites.showFavoritesArranger();
+        }));
+        // A separate test install has another package: releases update the real app only.
+        if ("me.hapke.inkside".equals(act.getPackageName())) {
+            addOverflowRow(menu, overflowItem(R.drawable.ic_sync, "Update", () -> {
+                dismissOverflowMenu();
+                act.updater.show();
+            }));
+        }
+        addOverflowRow(menu, overflowItem(R.drawable.ic_info, "About", () -> {
+            dismissOverflowMenu();
+            AboutDialog.show(act);
         }));
         showDropdownUnder(anchor, menu);
     }
@@ -430,24 +452,35 @@ final class OverflowMenu {
         menu.setPadding(act.dp(MainActivity.SPACE_MD), act.dp(MainActivity.SPACE_MD), act.dp(MainActivity.SPACE_MD), act.dp(MainActivity.SPACE_MD));
         addOverflowRow(menu, overflowItem(R.drawable.ic_upload, "Upload file", () -> {
             dismissOverflowMenu();
-            act.conversations.openAttachmentPicker("", false);
+            act.conversations.openAttachmentPicker(act.attachRoleMode, false);
         }));
         addOverflowRow(menu, overflowItem(R.drawable.ic_pdf, "Upload document", () -> {
             dismissOverflowMenu();
-            act.conversations.openAttachmentPicker("", true);
+            act.conversations.openAttachmentPicker(act.attachRoleMode, true);
         }));
-        View divider = m3MenuDivider();
-        LinearLayout.LayoutParams dlp = (LinearLayout.LayoutParams) divider.getLayoutParams();
-        dlp.topMargin = act.dp(MainActivity.SPACE_SM);
-        dlp.bottomMargin = act.dp(MainActivity.SPACE_SM);
-        menu.addView(divider, dlp);
-        addOverflowRow(menu, overflowItem(R.drawable.ic_description, "As reference", () -> {
-            dismissOverflowMenu();
-            act.conversations.openAttachmentPicker("reference", false);
+        addMenuDivider(menu);
+        // Toggles, not actions: they stay as set (the menu stays open) and shape what is
+        // uploaded and asked next. A file has one role, so reference and goal exclude
+        // each other.
+        final Material3Switch[] roles = new Material3Switch[2];
+        addOverflowRow(menu, toggleItem(R.drawable.ic_description, "As reference",
+                "reference".equals(act.attachRoleMode), (sw, on) -> {
+            roles[0] = sw;
+            if (on && roles[1] != null) roles[1].setChecked(false, true);
+            act.attachRoleMode = on ? "reference" : ("reference".equals(act.attachRoleMode) ? "" : act.attachRoleMode);
+            act.conversations.refreshAttachButton();
         }));
-        addOverflowRow(menu, overflowItem(R.drawable.ic_check_circle, "As learning goal", () -> {
-            dismissOverflowMenu();
-            act.conversations.openAttachmentPicker("goal", false);
+        addOverflowRow(menu, toggleItem(R.drawable.ic_check_circle, "As learning goal",
+                "goal".equals(act.attachRoleMode), (sw, on) -> {
+            roles[1] = sw;
+            if (on && roles[0] != null) roles[0].setChecked(false, true);
+            act.attachRoleMode = on ? "goal" : ("goal".equals(act.attachRoleMode) ? "" : act.attachRoleMode);
+            act.conversations.refreshAttachButton();
+        }));
+        addOverflowRow(menu, toggleItem(R.drawable.ic_viz, "Visualization",
+                act.visualizeMode, (sw, on) -> {
+            act.visualizeMode = on;
+            act.conversations.refreshAttachButton();
         }));
 
         int[] loc = new int[2];
@@ -746,6 +779,44 @@ final class OverflowMenu {
         text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         row.addView(text, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        return row;
+    }
+
+    /** Called with the row's switch once when built (on == current state, for wiring), then on each change. */
+    private interface ToggleChange {
+        void changed(Material3Switch sw, boolean on);
+    }
+
+    /** A row with a switch at its end; tapping anywhere on the row flips it. */
+    private View toggleItem(int iconRes, String label, boolean checked, ToggleChange onChange) {
+        final Material3Switch sw = new Material3Switch(act);
+        LinearLayout row = (LinearLayout) overflowItem(iconRes, label, () -> {
+            // setChecked does not call the switch's listener; a tap on the row reports itself.
+            boolean on = !sw.isChecked();
+            sw.setChecked(on, true);
+            onChange.changed(sw, on);
+        });
+        sw.applyColors(act.M3_PRIMARY, act.M3_PRIMARY_CONTAINER, act.M3_SURFACE_CONTAINER_HIGHEST,
+                act.M3_OUTLINE_VARIANT, act.M3_ON_SURFACE);
+        sw.setChecked(checked);
+        sw.setContentDescription(label);
+        LinearLayout.LayoutParams swLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        swLp.leftMargin = act.dp(MainActivity.SPACE_SM);
+        swLp.rightMargin = act.dp(MainActivity.SPACE_SM);
+        row.addView(sw, swLp);
+        onChange.changed(sw, checked);
+        sw.setOnCheckedChangeListener((v, on) -> onChange.changed(sw, on));
+        return row;
+    }
+
+    /** A row that opens a submenu: the item, with an arrow at its end. */
+    private View submenuItem(int iconRes, String label, Runnable open) {
+        LinearLayout row = (LinearLayout) overflowItem(iconRes, label, open);
+        ImageView arrow = new ImageView(act);
+        arrow.setImageResource(R.drawable.ic_chevron_right);
+        arrow.setColorFilter(new PorterDuffColorFilter(act.M3_ON_SURFACE_VARIANT, PorterDuff.Mode.SRC_IN));
+        row.addView(arrow, new LinearLayout.LayoutParams(act.dp(20), act.dp(20)));
         return row;
     }
 

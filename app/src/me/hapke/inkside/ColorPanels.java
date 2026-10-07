@@ -59,7 +59,7 @@ final class ColorPanels {
         bg.setCornerRadius(act.dp(MainActivity.TOOL_PILL_RADIUS));
         bg.setColor(act.M3_SURFACE_CONTAINER_HIGH);
         pill.setBackground(bg);
-        pill.setElevation(act.dp(4));
+        SketchStyle.elevate(pill, 4);
         pill.setClickable(true);
         pill.setOnClickListener(v -> {});
 
@@ -232,7 +232,7 @@ final class ColorPanels {
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(act.dp(20), act.dp(18), act.dp(20), act.dp(16));
         act.settingsPanel.applyOptionsCardSurface(card);
-        card.setElevation(act.dp(8));
+        SketchStyle.elevate(card, 8);
         card.setClickable(true);
         card.setOnClickListener(v -> {});
 
@@ -244,6 +244,7 @@ final class ColorPanels {
         title.setText(heading);
         title.setTextColor(act.M3_ON_SURFACE);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
+        HeadlineFont.apply(title);
         header.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         final View oldHalf = new View(act);
         final View newHalf = new View(act);

@@ -134,6 +134,8 @@ final class SessionPersistence {
             shapeTool.put("fill", act.shapeFill);
             shapeTool.put("border", act.shapeBorder);
             shapeTool.put("width", act.shapeBorderWidth);
+            shapeTool.put("dash", act.shapeDash);
+            state.put("lineStyle", act.lineStyle);
             state.put("shapeTool", shapeTool);
             JSONObject textDefaults = new JSONObject();
             textDefaults.put("size", (double) CanvasTextField.newSize);
@@ -453,7 +455,12 @@ final class SessionPersistence {
                 act.shapeFill = shapeTool.optInt("fill", act.shapeFill);
                 act.shapeBorder = shapeTool.optInt("border", act.shapeBorder);
                 act.shapeBorderWidth = (float) shapeTool.optDouble("width", act.shapeBorderWidth);
+                act.shapeDash = Math.max(0, Math.min(CodeCanvasView.LINE_STYLE_COUNT - 1,
+                        shapeTool.optInt("dash", 0)));
             }
+            act.lineStyle = Math.max(0, Math.min(CodeCanvasView.LINE_STYLE_COUNT - 1,
+                    state.optInt("lineStyle", 0)));
+            if (act.canvas != null) act.canvas.setLineStyle(act.lineStyle);
             act.penTools.applyShapeStyle();
             JSONArray pensJson = state.optJSONArray("pens");
             if (pensJson != null) {
@@ -614,7 +621,7 @@ final class SessionPersistence {
             if (state.has("explorerPanelWidthDp")) {
                 act.explorerPanelWidthPx = act.dp(state.optInt("explorerPanelWidthDp", MainActivity.EXPLORER_PANEL_W));
             }
-            act.appThemeId = state.optString("appThemeId", "matcha");
+            act.appThemeId = state.optString("appThemeId", ThemeConfig.APP_THEMES[0].id);
             // Code palette follows app theme; ignore legacy separate codeStyleId.
             act.codeStyleId = act.appThemeId;
             // Chat is left-only; ignore any legacy right-side preference.

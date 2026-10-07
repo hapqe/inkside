@@ -132,7 +132,7 @@ final class BridgeStatus {
             bridgeStatusChip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
             bridgeStatusChip.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
             bridgeStatusChip.setPadding(act.dp(14), act.dp(6), act.dp(14), act.dp(6));
-            bridgeStatusChip.setElevation(act.dp(10));
+            SketchStyle.elevate(bridgeStatusChip, 10);
             bridgeStatusChip.setClickable(true);
             bridgeStatusChip.setOnClickListener(v -> {
                 if (bridgeState == 3 || act.pairedHost == null) act.computers.showConnect();
@@ -149,6 +149,7 @@ final class BridgeStatus {
         bg.setColor(act.M3_SURFACE_CONTAINER_HIGHEST);
         bg.setStroke(act.dp(1), state == 3 ? 0xFFF59E0B : 0xFFEF4444);
         bridgeStatusChip.setBackground(act.withHoverRipple(bg, false));
+        SketchStyle.elevate(bridgeStatusChip, 10);
         bridgeStatusChip.setTextColor(act.M3_ON_SURFACE);
         String name = act.computers.workspaceName();
         bridgeStatusChip.setText(act.pairedHost == null

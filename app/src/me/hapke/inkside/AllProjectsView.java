@@ -103,6 +103,7 @@ final class AllProjectsView extends FrameLayout {
         titleView = new TextView(ctx);
         titleView.setText("All Projects");
         titleView.setTextSize(28);
+        HeadlineFont.apply(titleView);
         titleView.setTextColor(colorOnSurface);
         titleView.setPadding(dp(4), 0, 0, 0);
         top.addView(titleView, new LinearLayout.LayoutParams(
@@ -1022,6 +1023,7 @@ final class AllProjectsView extends FrameLayout {
         g.setCornerRadius(dp(24));
         g.setColor(fill);
         g.setStroke(dp(1), stroke);
+        SketchStyle.border(g, getResources().getDisplayMetrics().density);
         return g;
     }
 
@@ -1052,7 +1054,7 @@ final class AllProjectsView extends FrameLayout {
     private void elevate(View v, int dpElevation) {
         v.setOutlineProvider(android.view.ViewOutlineProvider.BACKGROUND);
         v.setClipToOutline(true);
-        v.setElevation(dp(dpElevation));
+        SketchStyle.elevate(v, dpElevation);
     }
 
     private static String initialOf(String name) {

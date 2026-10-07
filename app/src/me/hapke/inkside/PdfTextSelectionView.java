@@ -66,7 +66,7 @@ final class PdfTextSelectionView extends FrameLayout {
         bar.setPadding(dp(4), dp(2), dp(4), dp(2));
         barBg.setCornerRadius(dp(999));
         bar.setBackground(barBg);
-        bar.setElevation(dp(8));
+        SketchStyle.elevate(bar, 8);
         bar.setVisibility(GONE);
         copyBtn = barButton("Copy", () -> {
             if (sel != null) host.copyText(sel.text);

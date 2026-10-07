@@ -231,6 +231,15 @@
       display: block;
     }
     .artifact-params { margin-bottom: 6px; }
+    /* Inkside themes (html.sketch): the website's look, an ink border and a hard offset shadow. */
+    html.sketch .artifact-card { border: 2px solid var(--fg); box-shadow: 4px 4px 0 var(--fg); }
+    html.sketch .artifact-open {
+      border: 2px solid var(--fg); background: var(--surface, #fff);
+      box-shadow: 3px 3px 0 var(--fg); font-weight: 600;
+      transition: transform 120ms ease, box-shadow 120ms ease;
+    }
+    html.sketch .artifact-open:hover { background: var(--surface, #fff); }
+    html.sketch .artifact-open:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--fg); }
     .artifact-actions { display: flex; justify-content: flex-end; margin-top: 4px; }
     .artifact-open {
       font-size: 13px; font-weight: 500; min-height: 36px; padding: 0 16px; border-radius: 999px;

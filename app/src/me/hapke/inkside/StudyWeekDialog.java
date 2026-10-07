@@ -88,6 +88,7 @@ final class StudyWeekDialog {
         titles.setOrientation(LinearLayout.VERTICAL);
         titles.setGravity(Gravity.CENTER_HORIZONTAL);
         weekTitle = text(20, act.M3_ON_SURFACE, true);
+        HeadlineFont.apply(weekTitle);
         weekSubtitle = text(12, act.M3_ON_SURFACE_VARIANT, false);
         weekTitle.setGravity(Gravity.CENTER);
         weekSubtitle.setGravity(Gravity.CENTER);

@@ -80,6 +80,7 @@ final class StudyNext {
 
         c.addView(kindChip(item.optString("kind"), on));
         TextView title = text(22, on, false);
+        HeadlineFont.apply(title);
         title.setText(subject(item));
         LinearLayout.LayoutParams tlp = MainActivity.matchWrap();
         tlp.topMargin = act.dp(14);
@@ -479,6 +480,7 @@ final class StudyNext {
         GradientDrawable bg = new GradientDrawable();
         bg.setCornerRadius(act.dp(radiusDp));
         bg.setColor(color | 0xFF000000);
+        SketchStyle.border(bg, act.getResources().getDisplayMetrics().density);
         c.setBackground(bg);
         c.setClipToOutline(true);
         return c;

@@ -59,7 +59,7 @@ final class PageStyleMenu {
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(act.dp(MainActivity.SPACE_XL + 4), act.dp(MainActivity.SPACE_LG), act.dp(MainActivity.SPACE_MD), act.dp(MainActivity.SPACE_XL));
         act.settingsPanel.applyOptionsCardSurface(card);
-        card.setElevation(act.dp(6));
+        SketchStyle.elevate(card, 6);
         card.setClickable(true);
         card.setOnClickListener(v -> {});
 
@@ -73,6 +73,7 @@ final class PageStyleMenu {
         title.setText("Page style");
         title.setTextColor(act.M3_ON_SURFACE);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
+        HeadlineFont.apply(title);
         titles.addView(title);
         TextView subtitle = new TextView(act);
         subtitle.setText("Page " + (page + 1) + " of " + Math.max(pageCount, page + 1));
@@ -103,7 +104,7 @@ final class PageStyleMenu {
 
         final PagePreviewView preview = new PagePreviewView(act);
         preview.setEdgeColor((act.M3_OUTLINE_VARIANT & 0x00FFFFFF) | 0x99000000);
-        preview.setElevation(act.dp(3));
+        SketchStyle.elevate(preview, 3);
         preview.setOutlineProvider(new ViewOutlineProvider() {
             @Override
             public void getOutline(View view, android.graphics.Outline outline) {

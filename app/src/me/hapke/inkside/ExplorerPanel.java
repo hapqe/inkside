@@ -439,6 +439,7 @@ final class ExplorerPanel {
         GradientDrawable g = new GradientDrawable();
         g.setColor(act.M3_SURFACE_CONTAINER);
         g.setCornerRadii(radii);
+        if (!act.compactScreen()) SketchStyle.border(g, act.getResources().getDisplayMetrics().density);
         explorerScrim.setBackground(g);
         if (act.explorerPanel != null) {
             act.explorerPanel.setBackgroundColor(0x00000000);

@@ -1402,6 +1402,8 @@ public class CodeCanvasView extends View {
         int fill;
         /** {@link #BRUSH_TAPE}: lifted, so what lies under it shows. */
         boolean revealed;
+        /** Line style ({@link #LINE_SOLID} …): pen strokes and shape borders. */
+        int dash;
 
         Stroke(int color, String colorName) {
             this.color = color;
@@ -1482,6 +1484,7 @@ public class CodeCanvasView extends View {
             n.shape = shape;
             n.fill = fill;
             n.revealed = revealed;
+            n.dash = dash;
             for (Sample p : samples) {
                 n.samples.add(new Sample(p.x, p.y, p.width));
             }
@@ -3291,7 +3294,6 @@ public class CodeCanvasView extends View {
         Thread t = new Thread(() -> {
             ExportLayer result;
             android.graphics.pdf.PdfDocument pdf = new android.graphics.pdf.PdfDocument();
-            plainHighlighter.set(true);
             try {
                 int pw = Math.max(1, Math.round(pageW));
                 int ph = Math.max(1, Math.round(pageH));
@@ -4545,12 +4547,14 @@ public class CodeCanvasView extends View {
             if (s.fill != 0) o.put("fill", s.fill);
         }
         if (s.brush == BRUSH_TAPE && s.revealed) o.put("revealed", true);
+        if (s.dash != LINE_SOLID) o.put("dash", s.dash);
     }
 
     private static void readStrokeExtras(Stroke s, org.json.JSONObject o) {
         s.shape = ShapeLibrary.clamp(o.optInt("shape", 0));
         s.fill = o.optInt("fill", 0);
         s.revealed = o.optBoolean("revealed", false);
+        s.dash = Math.max(0, Math.min(LINE_STYLE_COUNT - 1, o.optInt("dash", LINE_SOLID)));
     }
 
     /**
@@ -4636,6 +4640,7 @@ public class CodeCanvasView extends View {
 
     /** Steps {@link #undo} can still take. */
     public int undoDepth() {
+        dropEmptySteps();
         return undoStack.size();
     }
 
@@ -4647,6 +4652,7 @@ public class CodeCanvasView extends View {
     public void undo() {
         activeStroke = null;
         eraseX = eraseY = Float.NaN;
+        dropEmptySteps();
         if (undoStack.isEmpty()) return;
         ContentSnap prev = undoStack.removeLast();
         if (prev.full) {
@@ -4681,7 +4687,64 @@ public class CodeCanvasView extends View {
     private boolean reportedCanRedo;
 
     public boolean canUndo() {
+        dropEmptySteps();
         return !undoStack.isEmpty();
+    }
+
+    /**
+     * Removes steps that would change nothing: a snapshot taken before an edit that then
+     * did not happen (a text edit with no change, a slider touched but not moved, a style
+     * set to what it was). Undo, the history buttons and the swipe-undo scrubber then only
+     * count steps that do something.
+     */
+    private void dropEmptySteps() {
+        // The newest step against what is on the canvas now.
+        while (!undoStack.isEmpty() && matchesLive(undoStack.peekLast())) undoStack.removeLast();
+        // Older steps against the state the next step starts from (comparable only between
+        // whole-canvas snapshots).
+        if (undoStack.size() < 2) return;
+        ContentSnap[] steps = undoStack.toArray(new ContentSnap[0]);
+        boolean any = false;
+        boolean[] drop = new boolean[steps.length];
+        for (int i = steps.length - 2; i >= 0; i--) {
+            if (steps[i].full && steps[i + 1].full && sameContent(steps[i], steps[i + 1])) {
+                drop[i] = true;
+                any = true;
+            }
+        }
+        if (!any) return;
+        undoStack.clear();
+        for (int i = 0; i < steps.length; i++) if (!drop[i]) undoStack.addLast(steps[i]);
+    }
+
+    /** True when restoring {@code snap} would leave the canvas as it is. */
+    private boolean matchesLive(ContentSnap snap) {
+        if (snap.full) {
+            if (snap.strokes.size() != inkStrokes.size() || snap.images.size() != images.size()
+                    || snap.textFields.size() != textFields.size()) return false;
+            for (int i = 0; i < snap.strokes.size(); i++) {
+                if (snap.strokes.get(i).stroke != inkStrokes.get(i)) return false;
+            }
+            for (int i = 0; i < snap.images.size(); i++) {
+                if (snap.images.get(i).img != images.get(i)) return false;
+            }
+            for (int i = 0; i < snap.textFields.size(); i++) {
+                if (snap.textFields.get(i).field != textFields.get(i)) return false;
+            }
+        }
+        for (StrokeSnap s : snap.strokes) if (!s.matchesLive()) return false;
+        for (ImgSnap s : snap.images) if (!s.matchesLive()) return false;
+        for (TextFieldSnap s : snap.textFields) if (!s.matchesLive()) return false;
+        return true;
+    }
+
+    private static boolean sameContent(ContentSnap a, ContentSnap b) {
+        if (a.strokes.size() != b.strokes.size() || a.images.size() != b.images.size()
+                || a.textFields.size() != b.textFields.size()) return false;
+        for (int i = 0; i < a.strokes.size(); i++) if (!a.strokes.get(i).sameAs(b.strokes.get(i))) return false;
+        for (int i = 0; i < a.images.size(); i++) if (!a.images.get(i).sameAs(b.images.get(i))) return false;
+        for (int i = 0; i < a.textFields.size(); i++) if (!a.textFields.get(i).sameAs(b.textFields.get(i))) return false;
+        return true;
     }
 
     public boolean canRedo() {
@@ -5694,6 +5757,27 @@ public class CodeCanvasView extends View {
             s.snapWs = ws;
         }
 
+        boolean matchesLive() {
+            Stroke s = stroke;
+            if (s.color != color || s.presentHidden != presentHidden
+                    || !java.util.Objects.equals(s.colorName, colorName)) return false;
+            if (s.snapXs == xs && s.snapYs == ys && s.snapWs == ws) return true;
+            if (s.samples.size() != xs.length) return false;
+            for (int i = 0; i < xs.length; i++) {
+                Sample p = s.samples.get(i);
+                if (p.x != xs[i] || p.y != ys[i] || p.width != ws[i]) return false;
+            }
+            return true;
+        }
+
+        boolean sameAs(StrokeSnap o) {
+            return stroke == o.stroke && color == o.color && presentHidden == o.presentHidden
+                    && java.util.Objects.equals(colorName, o.colorName)
+                    && (xs == o.xs || java.util.Arrays.equals(xs, o.xs))
+                    && (ys == o.ys || java.util.Arrays.equals(ys, o.ys))
+                    && (ws == o.ws || java.util.Arrays.equals(ws, o.ws));
+        }
+
         void restore() {
             stroke.color = color;
             stroke.colorName = colorName;
@@ -5753,6 +5837,18 @@ public class CodeCanvasView extends View {
                     | (i.behindInk ? BEHIND_INK : 0);
         }
 
+        boolean matchesLive() {
+            CanvasImage i = img;
+            int f = (i.flipX ? FLIP_X : 0) | (i.flipY ? FLIP_Y : 0) | (i.behindInk ? BEHIND_INK : 0);
+            return i.cx == cx && i.cy == cy && i.width == w && i.height == h
+                    && i.rotationDeg == rot && i.presentHidden == presentHidden && f == flags;
+        }
+
+        boolean sameAs(ImgSnap o) {
+            return img == o.img && cx == o.cx && cy == o.cy && w == o.w && h == o.h
+                    && rot == o.rot && presentHidden == o.presentHidden && flags == o.flags;
+        }
+
         void restore() {
             img.cx = cx;
             img.cy = cy;
@@ -5772,6 +5868,16 @@ public class CodeCanvasView extends View {
         final float cx, cy, width, height;
         final boolean userSized;
         final boolean presentHidden;
+        /**
+         * Text and style, so editing a field is a real undo step (before, its step restored
+         * only the box and looked like it did nothing). Null text: a step loaded from a
+         * saved history, which never stored it; the text is then left as it is.
+         */
+        final String text;
+        final String fontFamily;
+        final int typefaceStyle;
+        final float textSize;
+        final int color;
 
         TextFieldSnap(CanvasTextField t, float cx, float cy, float width, float height,
                       boolean userSized, boolean hidden) {
@@ -5782,6 +5888,11 @@ public class CodeCanvasView extends View {
             this.height = height;
             this.userSized = userSized;
             presentHidden = hidden;
+            text = null;
+            fontFamily = null;
+            typefaceStyle = 0;
+            textSize = 0f;
+            color = 0;
         }
 
         TextFieldSnap(CanvasTextField t) {
@@ -5792,9 +5903,47 @@ public class CodeCanvasView extends View {
             width = t.width;
             height = t.height;
             userSized = t.userSized;
+            text = t.text;
+            fontFamily = t.fontFamily;
+            typefaceStyle = t.typefaceStyle;
+            textSize = t.textSize;
+            color = t.color;
         }
 
-        void restore() {
+        /** True when the field is still exactly like this. */
+        boolean matchesLive() {
+            CanvasTextField f = field;
+            return f.cx == cx && f.cy == cy && f.width == width && f.height == height
+                    && f.userSized == userSized && f.presentHidden == presentHidden
+                    && (text == null || (text.equals(f.text)
+                            && java.util.Objects.equals(fontFamily, f.fontFamily)
+                            && typefaceStyle == f.typefaceStyle && textSize == f.textSize
+                            && color == f.color));
+        }
+
+        boolean sameAs(TextFieldSnap o) {
+            return field == o.field && cx == o.cx && cy == o.cy && width == o.width
+                    && height == o.height && userSized == o.userSized
+                    && presentHidden == o.presentHidden && text != null && o.text != null
+                    && text.equals(o.text) && java.util.Objects.equals(fontFamily, o.fontFamily)
+                    && typefaceStyle == o.typefaceStyle && textSize == o.textSize && color == o.color;
+        }
+
+        /** Puts the field back; true when its text or style changed (it needs re-rendering). */
+        boolean restore() {
+            boolean content = false;
+            if (text != null) {
+                if (!text.equals(field.text)) {
+                    field.setText(text);
+                    content = true;
+                }
+                if (!java.util.Objects.equals(fontFamily, field.fontFamily)
+                        || typefaceStyle != field.typefaceStyle || textSize != field.textSize
+                        || color != field.color) {
+                    field.setStyle(fontFamily, typefaceStyle, textSize, color);
+                    content = true;
+                }
+            }
             field.cx = cx;
             field.cy = cy;
             field.width = width;
@@ -5802,6 +5951,7 @@ public class CodeCanvasView extends View {
             field.userSized = userSized;
             field.presentHidden = presentHidden;
             field.invalidateLayout();
+            return content;
         }
     }
 
@@ -6014,7 +6164,7 @@ public class CodeCanvasView extends View {
             strokeIds.put(s, strokeIds.size());
             strokeBrush.add(s.brush);
             org.json.JSONObject x = null;
-            if (isDraggedBrush(s.brush)) {
+            if (isDraggedBrush(s.brush) || s.dash != LINE_SOLID) {
                 x = new org.json.JSONObject();
                 try {
                     putStrokeExtras(s, x);
@@ -6380,7 +6530,7 @@ public class CodeCanvasView extends View {
         }
         textFields.clear();
         for (TextFieldSnap t : snap.textFields) {
-            t.restore();
+            if (t.restore()) maybeRequestLatexRender(t.field);
             textFields.add(t.field);
         }
         markSceneDirty();
@@ -6401,7 +6551,9 @@ public class CodeCanvasView extends View {
         if (snap == null) return;
         for (StrokeSnap st : snap.strokes) st.restore();
         for (ImgSnap im : snap.images) im.restore();
-        for (TextFieldSnap tf : snap.textFields) tf.restore();
+        for (TextFieldSnap tf : snap.textFields) {
+            if (tf.restore()) maybeRequestLatexRender(tf.field);
+        }
         if (hasSelection()) {
             // Undo/redo of a move or transform: the box follows the items back. The
             // frame is only rebuilt on demand, so it stayed where the move left it.
@@ -6511,16 +6663,20 @@ public class CodeCanvasView extends View {
         if (activeStroke.brush != BRUSH_INK) {
             // Its samples still change: build the effect fresh, never cache it.
             drawEffectStroke(canvas, activeStroke, strokePaint, true);
+        } else if (activeStroke.dash != LINE_SOLID) {
+            drawDashedStroke(canvas, activeStroke, strokePaint, true);
         } else {
             Paint ink = strokePaint;
+            int core = PASS_PLAIN;
             if (needsPenOutline(activeStroke)) {
-                drawLiveGeom(canvas, ink, PenOutline.color(), true);
+                drawLiveGeom(canvas, ink, PenOutline.color(), PASS_OUTLINE);
                 drawStrokeSegmentsPass(canvas, activeStroke, ink, strokeDrawPath,
-                        PenOutline.color(), true, from);
+                        PenOutline.color(), PASS_OUTLINE, from);
+                core = PASS_CORE;
             }
-            drawLiveGeom(canvas, ink, activeStroke.color, false);
+            drawLiveGeom(canvas, ink, activeStroke.color, core);
             drawStrokeSegmentsPass(canvas, activeStroke, ink, strokeDrawPath,
-                    activeStroke.color, false, from);
+                    activeStroke.color, core, from);
         }
         if (inkHasTip) activeStroke.samples.remove(activeStroke.samples.size() - 1);
     }
@@ -6612,14 +6768,14 @@ public class CodeCanvasView extends View {
         return p;
     }
 
-    private void drawLiveGeom(Canvas canvas, Paint ink, int color, boolean outline) {
+    private void drawLiveGeom(Canvas canvas, Paint ink, int color, int pass) {
         if (liveGeomPieces == 0 || liveGeomStroke != activeStroke) return;
         ink.setColor(color);
         ink.setStyle(Paint.Style.STROKE);
         ink.setStrokeCap(Paint.Cap.ROUND);
         ink.setStrokeJoin(Paint.Join.ROUND);
         for (int i = 0; i < liveGeomPaths.size(); i++) {
-            ink.setStrokeWidth(wide(liveGeomWidths[i], outline));
+            ink.setStrokeWidth(wide(liveGeomWidths[i], pass));
             canvas.drawPath(liveGeomPaths.get(i), ink);
         }
     }
@@ -6860,12 +7016,6 @@ public class CodeCanvasView extends View {
         }
     }
 
-    /**
-     * Set while annotations are drawn for PDF export: PDF pages cannot blend, so the
-     * highlighter falls back to plain translucent ink there.
-     */
-    private static final ThreadLocal<Boolean> plainHighlighter = ThreadLocal.withInitial(() -> false);
-
     /** The highlighter's chisel: this much taller than the pen width, and this thick across. */
     private static final float HIGHLIGHT_NIB_H = 3.2f;
     private static final float HIGHLIGHT_NIB_W = 0.28f;
@@ -6873,9 +7023,7 @@ public class CodeCanvasView extends View {
     /**
      * Highlighter: a flat chisel nib held upright, swept along the stroke — flat ends,
      * even width, no round tip. It is one filled shape, so its own overlaps do not
-     * darken, and it is blended into what lies under it instead of painted over it:
-     * multiplied on light paper (black text stays black), screened on dark paper
-     * (light text stays light). Only the colour of the page under it changes.
+     * darken, and it lies under the handwriting and text, on the page.
      */
     private void drawHighlighterStroke(Canvas canvas, Stroke s, Paint ink, boolean live) {
         List<Sample> pts = s.samples;
@@ -6900,26 +7048,16 @@ public class CodeCanvasView extends View {
             g.fill = fill;
             if (!live) s.geom = g;
         }
-        boolean plain = plainHighlighter.get();
-        int paper = document.isOpen() ? pagePaperColor : sceneBgColor;
-        boolean darkPaper = luminance(paper) < 0.45f;
+        // Plain translucent ink. It is drawn under the handwriting and text (see
+        // drawSceneWorld), so it only ever colours the page, as a real highlighter does.
         ink.setStyle(Paint.Style.FILL);
-        if (plain) {
-            ink.setColor(argb(Math.round(((s.color >>> 24) & 0xFF) * 0.38f), s.color));
-        } else if (darkPaper) {
-            ink.setColor(mix(s.color, 0xFF000000, 0.25f));
-            ink.setAlpha(150);
-            ink.setBlendMode(android.graphics.BlendMode.SCREEN);
-        } else {
-            // A lighter tint, the way highlighter ink is a pale version of its colour.
-            ink.setColor(mix(s.color, 0xFFFFFFFF, 0.35f));
-            ink.setAlpha(225);
-            ink.setBlendMode(android.graphics.BlendMode.MULTIPLY);
-        }
+        ink.setColor(argb(Math.round(((s.color >>> 24) & 0xFF) * HIGHLIGHT_ALPHA), s.color));
         canvas.drawPath(g.fill, ink);
-        ink.setBlendMode(null);
         ink.setStyle(Paint.Style.STROKE);
     }
+
+    /** How much of the highlighter's colour shows: enough on white paper, never hiding text. */
+    private static final float HIGHLIGHT_ALPHA = 0.42f;
 
     /** The area an upright w×h nib (half sizes) sweeps from (ax,ay) to (bx,by): a hexagon. */
     private static void addNibSweep(Path out, float ax, float ay, float bx, float by,
@@ -6966,16 +7104,59 @@ public class CodeCanvasView extends View {
                 - (p[a * 2 + 1] - p[o * 2 + 1]) * (p[b * 2] - p[o * 2]);
     }
 
-    private static float luminance(int c) {
-        return (0.299f * ((c >> 16) & 0xFF) + 0.587f * ((c >> 8) & 0xFF) + 0.114f * (c & 0xFF)) / 255f;
+    // ---- Line styles -------------------------------------------------------------------
+
+    static final int LINE_SOLID = 0, LINE_DASHED = 1, LINE_DOTTED = 2, LINE_DASH_DOT = 3,
+            LINE_LONG_DASH = 4;
+    static final int LINE_STYLE_COUNT = 5;
+    static final String[] LINE_STYLE_LABELS = {"Solid", "Dashed", "Dotted", "Dash-dot", "Long dash"};
+
+    /** Line style for new pen strokes. */
+    private int lineStyle = LINE_SOLID;
+
+    public void setLineStyle(int style) {
+        lineStyle = Math.max(0, Math.min(LINE_STYLE_COUNT - 1, style));
     }
 
-    /** {@code a} moved {@code t} of the way to {@code b}, keeping {@code a}'s alpha. */
-    private static int mix(int a, int b, float t) {
-        int r = Math.round(((a >> 16) & 0xFF) + (((b >> 16) & 0xFF) - ((a >> 16) & 0xFF)) * t);
-        int g = Math.round(((a >> 8) & 0xFF) + (((b >> 8) & 0xFF) - ((a >> 8) & 0xFF)) * t);
-        int bl = Math.round((a & 0xFF) + ((b & 0xFF) - (a & 0xFF)) * t);
-        return (a & 0xFF000000) | (r << 16) | (g << 8) | bl;
+    /**
+     * The dash pattern for a style at a line width: dashes and gaps grow with the line, so
+     * a thick dashed line looks like a thin one scaled up. Null for solid.
+     */
+    static android.graphics.DashPathEffect dashEffect(int style, float width) {
+        float w = Math.max(0.6f, width);
+        switch (style) {
+            case LINE_DASHED: return new android.graphics.DashPathEffect(new float[]{w * 3f, w * 2.4f}, 0f);
+            // Round caps turn a near-zero dash into a dot one line-width across.
+            case LINE_DOTTED: return new android.graphics.DashPathEffect(new float[]{0.01f, w * 2.2f}, 0f);
+            case LINE_DASH_DOT:
+                return new android.graphics.DashPathEffect(new float[]{w * 3.4f, w * 2.2f, 0.01f, w * 2.2f}, 0f);
+            case LINE_LONG_DASH: return new android.graphics.DashPathEffect(new float[]{w * 7f, w * 2.8f}, 0f);
+            default: return null;
+        }
+    }
+
+    /**
+     * A styled pen stroke: one smoothed path at the stroke's mean width, with the dash
+     * pattern laid along all of it (pieces of different width would each restart it).
+     */
+    private void drawDashedStroke(Canvas canvas, Stroke s, Paint ink, boolean live) {
+        List<Sample> pts = s.samples;
+        if (pts.isEmpty()) return;
+        StrokeGeom g = effectGeom(s, live);
+        if (g == null || g.paths.length != 1) {
+            g = new StrokeGeom(new Path[]{buildGlowPath(pts, strokeFollow)},
+                    new float[]{averageWidth(pts)}, strokeGeomVersion);
+            if (!live) s.geom = g;
+        }
+        float w = g.widths[0];
+        ink.setStyle(Paint.Style.STROKE);
+        ink.setStrokeCap(Paint.Cap.ROUND);
+        ink.setStrokeJoin(Paint.Join.ROUND);
+        ink.setStrokeWidth(w);
+        ink.setColor(s.color);
+        ink.setPathEffect(dashEffect(s.dash, w));
+        canvas.drawPath(g.paths[0], ink);
+        ink.setPathEffect(null);
     }
 
     // ---- Tape and shapes -------------------------------------------------------------
@@ -6986,6 +7167,11 @@ public class CodeCanvasView extends View {
     private static final float DEFAULT_SHAPE_PX = 140f;
 
     private int shapeKind = ShapeLibrary.RECTANGLE;
+    private int shapeDash = LINE_SOLID;
+
+    public void setShapeDash(int style) {
+        shapeDash = Math.max(0, Math.min(LINE_STYLE_COUNT - 1, style));
+    }
     private int shapeFill = 0;
     private int shapeBorderColor = 0xFF4C8DFF;
     private float shapeBorderWidth = 3f;
@@ -7131,7 +7317,10 @@ public class CodeCanvasView extends View {
             if (!shapeFrame(s, live, m)) return;
             Path path = ShapeLibrary.unitPath(s.shape);
             path.transform(m);
-            g = new StrokeGeom(new Path[0], new float[]{s.samples.get(0).width}, strokeGeomVersion);
+            Path detail = ShapeLibrary.detailPath(s.shape);
+            if (detail != null) detail.transform(m);
+            g = new StrokeGeom(detail != null ? new Path[]{detail} : new Path[0],
+                    new float[]{s.samples.get(0).width}, strokeGeomVersion);
             g.fill = path;
             if (!live) s.geom = g;
         }
@@ -7148,7 +7337,10 @@ public class CodeCanvasView extends View {
             ink.setStrokeCap(Paint.Cap.ROUND);
             ink.setStrokeWidth(w);
             ink.setColor(s.color);
+            ink.setPathEffect(dashEffect(s.dash, w));
             canvas.drawPath(g.fill, ink);
+            for (Path d : g.paths) canvas.drawPath(d, ink);
+            ink.setPathEffect(null);
         } else if (open) {
             // A line without a border would be invisible: give it a hairline.
             ink.setStyle(Paint.Style.STROKE);
@@ -7187,6 +7379,20 @@ public class CodeCanvasView extends View {
         return false;
     }
 
+    /** True when handwriting or text lies under {@code hl}, a new highlighter stroke. */
+    private boolean writingUnder(Stroke hl) {
+        for (Stroke st : inkStrokes) {
+            if (st != hl && st.brush != BRUSH_HIGHLIGHTER && st.brush != BRUSH_TAPE
+                    && RectF.intersects(st.bounds, hl.bounds)) {
+                return true;
+            }
+        }
+        for (CanvasTextField tf : textFields) {
+            if (RectF.intersects(tf.bounds(), hl.bounds)) return true;
+        }
+        return false;
+    }
+
     /** True when a tape lies over {@code r}: ink stamped there would land on top of it. */
     private boolean tapeOver(RectF r) {
         for (Stroke st : inkStrokes) {
@@ -7205,6 +7411,7 @@ public class CodeCanvasView extends View {
             st.color = shapeBorderColor;
             st.shape = shapeKind;
             st.fill = shapeFill;
+            st.dash = shapeDash;
             width = shapeBorderWidth;
         } else {
             width = baseThicknessPx * TAPE_HEIGHT_PER_PX;
@@ -8299,6 +8506,12 @@ public class CodeCanvasView extends View {
             } else {
                 markSceneDirty();
             }
+            return;
+        }
+        if (s.brush == BRUSH_HIGHLIGHTER && writingUnder(s)) {
+            // Stamped in place it would lie on top of the writing it crosses.
+            deselectedStrokes.add(s);
+            markSceneDirty();
             return;
         }
         if (s.brush != BRUSH_TAPE && tapeOver(s.bounds)) {
@@ -9675,6 +9888,7 @@ public class CodeCanvasView extends View {
                 drawBaseline = null;
                 activeStroke = new Stroke(inkColor, inkName);
                 activeStroke.brush = brush;
+                if (brush == BRUSH_INK) activeStroke.dash = lineStyle;
                 cancelShapeHold();
                 if (isDraggedBrush(brush)) {
                     beginDraggedStroke(activeStroke, w[0], w[1], event.getX(index), event.getY(index));
@@ -10202,6 +10416,10 @@ public class CodeCanvasView extends View {
             drawEffectStroke(canvas, s, ink, false);
             return;
         }
+        if (s.dash != LINE_SOLID) {
+            drawDashedStroke(canvas, s, ink, false);
+            return;
+        }
         if (s.samples.size() <= 2) {
             drawStrokeSegments(canvas, s, ink, scratch);
             return;
@@ -10219,17 +10437,19 @@ public class CodeCanvasView extends View {
         ink.setStyle(Paint.Style.STROKE);
         ink.setStrokeCap(Paint.Cap.ROUND);
         ink.setStrokeJoin(Paint.Join.ROUND);
+        int core = PASS_PLAIN;
         if (needsPenOutline(s)) {
             // All of the outline first, so it never cuts into a later piece of the stroke.
             ink.setColor(PenOutline.color());
             for (int i = 0; i < g.paths.length; i++) {
-                ink.setStrokeWidth(g.widths[i] + PenOutline.strokeExtra(g.widths[i]));
+                ink.setStrokeWidth(wide(g.widths[i], PASS_OUTLINE));
                 canvas.drawPath(g.paths[i], ink);
             }
+            core = PASS_CORE;
         }
         ink.setColor(s.color);
         for (int i = 0; i < g.paths.length; i++) {
-            ink.setStrokeWidth(g.widths[i]);
+            ink.setStrokeWidth(wide(g.widths[i], core));
             canvas.drawPath(g.paths[i], ink);
         }
     }
@@ -10299,19 +10519,29 @@ public class CodeCanvasView extends View {
 
     /** Per-segment drawing for the stroke still under the pen (its samples change). */
     private void drawStrokeSegments(Canvas canvas, Stroke s, Paint ink, Path scratch) {
+        int core = PASS_PLAIN;
         if (needsPenOutline(s)) {
-            drawStrokeSegmentsPass(canvas, s, ink, scratch, PenOutline.color(), true, 0);
+            drawStrokeSegmentsPass(canvas, s, ink, scratch, PenOutline.color(), PASS_OUTLINE, 0);
+            core = PASS_CORE;
         }
-        drawStrokeSegmentsPass(canvas, s, ink, scratch, s.color, false, 0);
+        drawStrokeSegmentsPass(canvas, s, ink, scratch, s.color, core, 0);
     }
 
-    private static float wide(float width, boolean outline) {
-        return outline ? width + PenOutline.strokeExtra(width) : width;
+    /** A stroke's passes: plain, or with the outline the outline and then the slimmer core. */
+    private static final int PASS_PLAIN = 0, PASS_OUTLINE = 1, PASS_CORE = 2;
+
+    /**
+     * The width a pass draws at. With the readability outline the stroke keeps its own
+     * width: the outline is drawn at it, and the colour inside it a little narrower.
+     */
+    private static float wide(float width, int pass) {
+        if (pass != PASS_CORE) return width;
+        return Math.max(width * 0.4f, width - PenOutline.strokeExtra(width));
     }
 
     /** Pieces before {@code from} are skipped (already drawn from the live cache). */
     private void drawStrokeSegmentsPass(Canvas canvas, Stroke s, Paint ink, Path scratch,
-                                        int color, boolean outline, int from) {
+                                        int color, int pass, int from) {
         ink.setColor(color);
         ink.setStyle(Paint.Style.STROKE);
         ink.setStrokeCap(Paint.Cap.ROUND);
@@ -10321,14 +10551,14 @@ public class CodeCanvasView extends View {
         if (n == 0) return;
         if (n == 1) {
             Sample a = pts.get(0);
-            ink.setStrokeWidth(wide(a.width, outline));
+            ink.setStrokeWidth(wide(a.width, pass));
             canvas.drawPoint(a.x, a.y, ink);
             return;
         }
         if (n == 2) {
             Sample a = pts.get(0);
             Sample b = pts.get(1);
-            ink.setStrokeWidth(wide((a.width + b.width) * 0.5f, outline));
+            ink.setStrokeWidth(wide((a.width + b.width) * 0.5f, pass));
             canvas.drawLine(a.x, a.y, b.x, b.y, ink);
             return;
         }
@@ -10340,7 +10570,7 @@ public class CodeCanvasView extends View {
             Sample p1 = pts.get(1);
             float midX = (p0.x + p1.x) * 0.5f;
             float midY = (p0.y + p1.y) * 0.5f;
-            ink.setStrokeWidth(wide((p0.width + p1.width) * 0.5f, outline));
+            ink.setStrokeWidth(wide((p0.width + p1.width) * 0.5f, pass));
             canvas.drawLine(p0.x, p0.y, midX, midY, ink);
         }
 
@@ -10352,7 +10582,7 @@ public class CodeCanvasView extends View {
             float y0 = (prev.y + a.y) * 0.5f;
             float x1 = (a.x + b.x) * 0.5f;
             float y1 = (a.y + b.y) * 0.5f;
-            ink.setStrokeWidth(wide(a.width, outline));
+            ink.setStrokeWidth(wide(a.width, pass));
             // Control point that would make the curve pass through the sample at t=0.5:
             // B(0.5) = (P0 + 2*P1 + P2)/4, so P1 = 2a - (P0 + P2)/2.
             float follow = strokeFollow;
@@ -10368,7 +10598,7 @@ public class CodeCanvasView extends View {
         Sample prev = pts.get(n - 2);
         float endX = (prev.x + last.x) * 0.5f;
         float endY = (prev.y + last.y) * 0.5f;
-        ink.setStrokeWidth(wide((prev.width + last.width) * 0.5f, outline));
+        ink.setStrokeWidth(wide((prev.width + last.width) * 0.5f, pass));
         canvas.drawLine(endX, endY, last.x, last.y, ink);
     }
 
@@ -10456,9 +10686,22 @@ public class CodeCanvasView extends View {
         int keep = p.getColor();
         p.setStyle(Paint.Style.FILL);
         p.setColor(emptyButtonFill);
-        p.setShadowLayer(10f * den, 0, 3f * den, 0x33000000);
-        canvas.drawCircle(cx, cy, r, p);
-        p.clearShadowLayer();
+        if (SketchStyle.on) {
+            int fillColor = p.getColor();
+            p.setColor(SketchStyle.ink);
+            canvas.drawCircle(cx + 3f * den, cy + 3f * den, r, p);
+            p.setColor(fillColor);
+            canvas.drawCircle(cx, cy, r, p);
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(2f * den);
+            p.setColor(SketchStyle.ink);
+            canvas.drawCircle(cx, cy, r - den, p);
+            p.setStyle(Paint.Style.FILL);
+        } else {
+            p.setShadowLayer(10f * den, 0, 3f * den, 0x33000000);
+            canvas.drawCircle(cx, cy, r, p);
+            p.clearShadowLayer();
+        }
         p.setColor(emptyButtonIcon);
         p.setStyle(Paint.Style.STROKE);
         p.setStrokeCap(Paint.Cap.ROUND);
@@ -11405,6 +11648,15 @@ public class CodeCanvasView extends View {
 
         drawSceneImages(canvas, imgs, skipImages, cull, itemBounds, imgInk, true);
 
+        // Highlighter on the page, under everything written on it.
+        for (int i = 0; i < strokes.size(); i++) {
+            Stroke s = strokes.get(i);
+            if (s.brush != BRUSH_HIGHLIGHTER) continue;
+            if (skipStrokes != null && skipStrokes.contains(s)) continue;
+            if (!s.bounds.isEmpty() && !RectF.intersects(cull, s.bounds)) continue;
+            drawStroke(canvas, s, inkPaint, inkPath);
+        }
+
         for (int i = 0; i < texts.size(); i++) {
             CanvasTextField tf = texts.get(i);
             if (skipTexts != null && skipTexts.contains(tf)) continue;
@@ -11431,6 +11683,7 @@ public class CodeCanvasView extends View {
                 anyTape = true;
                 continue;
             }
+            if (s.brush == BRUSH_HIGHLIGHTER) continue;  // drawn above, under the writing
             if (skipStrokes != null && skipStrokes.contains(s)) continue;
             if (!s.bounds.isEmpty() && !RectF.intersects(cull, s.bounds)) continue;
             drawStroke(canvas, s, inkPaint, inkPath);

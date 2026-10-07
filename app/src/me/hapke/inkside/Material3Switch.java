@@ -59,7 +59,9 @@ final class Material3Switch extends View {
         colorPrimary = primary;
         colorOnPrimary = onPrimary;
         colorSurfaceContainerHighest = surfaceContainerHighest;
-        colorOutline = outline;
+        // Off reads as "off", not "disabled": the outline and handle sit well toward the text
+        // colour instead of the faint divider colour callers pass (M3's outline role).
+        colorOutline = lerpColor(outline | 0xFF000000, onSurface | 0xFF000000, 0.6f);
         colorOnSurface = onSurface;
         invalidate();
     }

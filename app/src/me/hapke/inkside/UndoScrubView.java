@@ -239,9 +239,13 @@ final class UndoScrubView extends View {
 
         cardPaint.setColor(colorSurface);
         cardPaint.setAlpha(alpha);
-        cardPaint.setShadowLayer(dp(14), 0, dp(4), (Math.round(0x55 * appear) << 24));
-        c.drawRoundRect(card, h / 2.4f, h / 2.4f, cardPaint);
-        cardPaint.clearShadowLayer();
+        if (SketchStyle.on) {
+            SketchStyle.drawCard(c, card, h / 2.4f, cardPaint, alpha, getResources().getDisplayMetrics().density);
+        } else {
+            cardPaint.setShadowLayer(dp(14), 0, dp(4), (Math.round(0x55 * appear) << 24));
+            c.drawRoundRect(card, h / 2.4f, h / 2.4f, cardPaint);
+            cardPaint.clearShadowLayer();
+        }
 
         drawHeader(c, cx, alpha);
         drawTrack(c, cx, w, alpha);

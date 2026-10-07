@@ -205,6 +205,7 @@ final class LearningDialog {
         LinearLayout col = new LinearLayout(act);
         col.setOrientation(LinearLayout.VERTICAL);
         TextView title = text(22, act.M3_ON_PRIMARY_CONTAINER, false);
+        HeadlineFont.apply(title);
         title.setText(headline(progress));
         col.addView(title);
         TextView line = text(14, (act.M3_ON_PRIMARY_CONTAINER & 0x00FFFFFF) | 0xCC000000, false);
@@ -606,6 +607,7 @@ final class LearningDialog {
                 new FrameLayout.LayoutParams(act.dp(32), act.dp(32), Gravity.CENTER));
         box.addView(disc, new LinearLayout.LayoutParams(act.dp(72), act.dp(72)));
         TextView t = text(20, act.M3_ON_SURFACE, false);
+        HeadlineFont.apply(t);
         t.setText(title);
         t.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(
@@ -633,6 +635,7 @@ final class LearningDialog {
         GradientDrawable bg = new GradientDrawable();
         bg.setCornerRadius(act.dp(radiusDp));
         bg.setColor(color | 0xFF000000);
+        SketchStyle.border(bg, act.getResources().getDisplayMetrics().density);
         c.setBackground(bg);
         c.setClipToOutline(true);
         return c;

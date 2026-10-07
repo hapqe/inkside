@@ -347,11 +347,32 @@ final class PenTools {
 
     // ---- Shape tool ----------------------------------------------------------------
 
+    /** Short names of the line styles, for the segmented row and the shape chip. */
+    static final String[] LINE_SHORT = {"Solid", "Dash", "Dot", "Dash-dot", "Long"};
+
     /** Puts the shape tool's settings on the canvas. */
     void applyShapeStyle() {
         if (act.canvas != null) {
             act.canvas.setShapeStyle(act.shapeKind, act.shapeFill, act.shapeBorder, act.shapeBorderWidth);
+            act.canvas.setShapeDash(act.shapeDash);
         }
+    }
+
+    private TextView shapeLineLabel;
+
+    /** The shape border's line style, as a menu under the chip. */
+    private void showShapeLineMenu(View anchor) {
+        M3Menu m = new M3Menu(act);
+        for (int i = 0; i < CodeCanvasView.LINE_STYLE_COUNT; i++) {
+            final int style = i;
+            m.add(i == act.shapeDash ? R.drawable.ic_check : 0, CodeCanvasView.LINE_STYLE_LABELS[i], () -> {
+                act.shapeDash = style;
+                applyShapeStyle();
+                refreshShapeOptions();
+                act.persistence.scheduleSave();
+            });
+        }
+        m.showUnder(anchor);
     }
 
     /**
@@ -380,10 +401,18 @@ final class PenTools {
         fill.addView(act.shapeFillSwatch, 0, new LinearLayout.LayoutParams(act.dp(20), act.dp(20)));
         row.addView(fill, chipLp(true));
 
+        LinearLayout line = optionChip(null, null);
+        shapeLineLabel = chipText(LINE_SHORT[act.shapeDash]);
+        line.addView(shapeLineLabel);
+        line.setClickable(true);
+        line.setOnClickListener(v -> showShapeLineMenu(v));
+        line.setContentDescription("Border line style");
+
         LinearLayout border = optionChip("Border", () -> showShapeColorPicker(false));
         act.shapeBorderSwatch = new View(act);
         border.addView(act.shapeBorderSwatch, 0, new LinearLayout.LayoutParams(act.dp(20), act.dp(20)));
         row.addView(border, chipLp(true));
+        row.addView(line, chipLp(true));
 
         // Width: the slider inside a chip of its own, with the value at its end.
         LinearLayout width = optionChip(null, null);
@@ -517,6 +546,7 @@ final class PenTools {
         }
         if (act.shapeFillSwatch != null) act.shapeFillSwatch.setBackground(colorDisc(act.shapeFill));
         if (act.shapeBorderSwatch != null) act.shapeBorderSwatch.setBackground(colorDisc(act.shapeBorder));
+        if (shapeLineLabel != null) shapeLineLabel.setText("Line: " + LINE_SHORT[act.shapeDash]);
     }
 
     /** Every shape in a grid, drawn in the current fill and border; a tap picks one. */
@@ -632,9 +662,31 @@ final class PenTools {
 
     /** The pen icon for the extra stroke settings wears the theme's primary colour. */
     void stylePenSettingsButton() {
-        if (act.penSettingsButton == null) return;
-        act.applyIconSelected(act.penSettingsButton, false);
-        act.penSettingsButton.setColorFilter(new PorterDuffColorFilter(act.M3_PRIMARY, PorterDuff.Mode.SRC_IN));
+        for (ImageView b : new ImageView[] {
+                act.penSettingsButton, act.lassoSettingsButton, act.eraserSettingsButton}) {
+            if (b == null) continue;
+            act.applyIconSelected(b, false);
+            b.setColorFilter(new PorterDuffColorFilter(act.M3_PRIMARY, PorterDuff.Mode.SRC_IN));
+        }
+    }
+
+    /**
+     * Theme change: the option rows take their colours when they are built, so the settings
+     * buttons are restyled and the shape row (its labels, swatches and slider) is rebuilt in
+     * place, keeping whether it shows.
+     */
+    void applyOptionsTheme() {
+        stylePenSettingsButton();
+        View old = act.shapeOptions;
+        if (old == null || !(old.getParent() instanceof ViewGroup)) return;
+        ViewGroup parent = (ViewGroup) old.getParent();
+        int at = parent.indexOfChild(old);
+        LinearLayout fresh = buildShapeOptionsRow();
+        fresh.setVisibility(old.getVisibility());
+        parent.removeViewAt(at);
+        parent.addView(fresh, at, old.getLayoutParams());
+        act.shapeOptions = fresh;
+        refreshShapeOptions();
     }
 
     private void styleBrushChip(View chip, boolean selected) {
@@ -900,7 +952,7 @@ final class PenTools {
         bg.setColor(act.M3_SURFACE_CONTAINER_HIGH | 0xFF000000);
         bg.setStroke(act.dp(1), (act.M3_OUTLINE_VARIANT & 0x00FFFFFF) | 0x55000000);
         card.setBackground(bg);
-        card.setElevation(act.dp(8));
+        SketchStyle.elevate(card, 8);
         card.setClickable(true);
         card.setOnClickListener(v -> {});
 
@@ -1058,6 +1110,12 @@ final class PenTools {
             sizeHolder.addView(sizePresetEditor(false));
             subtitle.setText(CodeCanvasView.BRUSH_LABELS[act.brush]);
         };
+        card.addView(toolMenuLabel("Line style (ink)"));
+        card.addView(act.settingsPanel.optionsSegmentRow(LINE_SHORT, act.lineStyle, i -> {
+            act.lineStyle = i;
+            if (act.canvas != null) act.canvas.setLineStyle(i);
+            act.persistence.scheduleSave();
+        }), MainActivity.matchWrap());
         card.addView(toolMenuLabel("Feel"));
         card.addView(penSettingsSliderRow(
                 "Smoothing",

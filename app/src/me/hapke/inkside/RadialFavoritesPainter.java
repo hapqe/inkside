@@ -328,8 +328,14 @@ final class RadialFavoritesPainter {
         return new float[]{centerX + dp(o[0]), centerY + dp(o[1])};
     }
 
+    /**
+     * The menu is drawn this much larger than its layout's dp (offsets, chips, hit areas
+     * and the hub all scale together), so the buttons are easy to hit with a pen or finger.
+     */
+    private static final float MENU_SCALE = 1.45f;
+
     private float dp(float v) {
-        return v * density;
+        return v * density * MENU_SCALE;
     }
 
     private void requestRedraw() {

@@ -79,6 +79,9 @@ final class MiniChatWindow extends LinearLayout {
     private int outlineVariant = 0xFF49454F;
 
     private float downRawX, downRawY, startTx, startTy;
+    /** Where the user dragged it (translation), and how far the keyboard reaches up. */
+    private float userTy;
+    private int keyboardPx;
     private boolean dragging;
     private final int touchSlop;
 
@@ -284,6 +287,7 @@ final class MiniChatWindow extends LinearLayout {
         cardBg.setColor(surface);
         cardBg.setStroke(dp(1), (outlineVariant & 0x00FFFFFF) | 0x55000000);
         setBackground(cardBg);
+        SketchStyle.elevate(this, 12);
         title.setTextColor(onSurface);
         tint(expandBtn, onSurfaceVariant);
         tint(closeBtn, onSurfaceVariant);
@@ -291,6 +295,7 @@ final class MiniChatWindow extends LinearLayout {
         pill.setCornerRadius(dp(24));
         pill.setColor(surfaceHighest);
         inputRow.setBackground(pill);
+        SketchStyle.outline(inputRow, 4);
         input.setTextColor(onSurface);
         input.setHintTextColor(onSurfaceVariant);
         GradientDrawable sendBg = new GradientDrawable();
@@ -298,6 +303,7 @@ final class MiniChatWindow extends LinearLayout {
         sendBg.setColor(primaryContainer);
         send.setBackground(new RippleDrawable(
                 ColorStateList.valueOf((onPrimaryContainer & 0x00FFFFFF) | 0x29000000), sendBg, null));
+        SketchStyle.outline(send, 2);
         tint(send, onPrimaryContainer);
         wave.setColor(primary);
         discard.setBackground(hoverRipple(true));
@@ -365,7 +371,7 @@ final class MiniChatWindow extends LinearLayout {
                 downRawX = e.getRawX();
                 downRawY = e.getRawY();
                 startTx = getTranslationX();
-                startTy = getTranslationY();
+                startTy = userTy;
                 dragging = false;
                 return true;
             case MotionEvent.ACTION_MOVE: {
@@ -389,6 +395,31 @@ final class MiniChatWindow extends LinearLayout {
             ty = Math.max(-getTop(), Math.min(parent.getHeight() - getBottom(), ty));
         }
         setTranslationX(tx);
+        userTy = ty;
+        applyY();
+    }
+
+    /** Back where its layout puts it (shown again elsewhere). */
+    void resetPosition() {
+        setTranslationX(0f);
+        userTy = 0f;
+        applyY();
+    }
+
+    /** The keyboard covers {@code px} of the screen's bottom: stay just above it. */
+    void setKeyboardOverlap(int px) {
+        keyboardPx = px;
+        applyY();
+    }
+
+    private void applyY() {
+        float ty = userTy;
+        View parent = (View) getParent();
+        if (keyboardPx > 0 && parent != null) {
+            float limit = parent.getHeight() - keyboardPx - dp(12);
+            float bottom = getTop() + ty + getHeight();
+            if (bottom > limit) ty = Math.max(-getTop(), ty - (bottom - limit));
+        }
         setTranslationY(ty);
     }
 

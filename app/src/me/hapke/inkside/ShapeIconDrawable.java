@@ -47,6 +47,11 @@ final class ShapeIconDrawable extends Drawable {
         paint.setStrokeWidth(strokeWidth);
         paint.setColor(stroke);
         c.drawPath(path, paint);
+        Path detail = ShapeLibrary.detailPath(kind);
+        if (detail != null) {
+            detail.transform(m);
+            c.drawPath(detail, paint);
+        }
     }
 
     @Override

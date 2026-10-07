@@ -39,6 +39,10 @@ import org.json.JSONObject;
  * Split out of {@link MainActivity}; reaches shared state through {@code act}.
  */
 final class ChatView {
+    /** The chat button's hard shadow under an Inkside theme: a smaller offset than other
+     *  floating surfaces, so the round button does not look pushed off its shadow (dp). */
+    static final int CHAT_FAB_SHADOW_DP = 2;
+
     private final MainActivity act;
 
     private View chatExpandedBody;
@@ -376,11 +380,12 @@ final class ChatView {
         composerShell.setBackground(composerBg);
         composerShell.setMinimumHeight(act.dp(MainActivity.CHAT_COMPOSER_MIN_H));
         composerShell.setClipToOutline(true);
+        SketchStyle.outline(composerShell, 4);
         act.chatComposerShell = composerShell;
 
         act.chatAttachButton = act.iconBtn(R.drawable.ic_add, () -> act.overflowMenu.showAttachMenu(act.chatAttachButton));
-        act.applyIconSelected(act.chatAttachButton, false);
         act.chatAttachButton.setContentDescription("Add to message");
+        act.conversations.refreshAttachButton();
         LinearLayout.LayoutParams attachBtnLp = new LinearLayout.LayoutParams(act.dp(32), act.dp(32));
         attachBtnLp.gravity = Gravity.CENTER_VERTICAL;
         buttonRow.addView(act.chatAttachButton, attachBtnLp);
@@ -462,12 +467,14 @@ final class ChatView {
 
         act.sendButton = act.iconBtn(R.drawable.ic_send, act.conversations::sendChat);
         act.applyIconSelected(act.sendButton, true);
+        SketchStyle.outline(act.sendButton, 2);
         LinearLayout.LayoutParams sendLp = new LinearLayout.LayoutParams(act.dp(32), act.dp(32));
         sendLp.gravity = Gravity.CENTER_VERTICAL;
         buttonRow.addView(act.sendButton, sendLp);
 
         act.stopButton = act.iconBtn(R.drawable.ic_stop, act.conversations::stopChat);
         act.applyIconSelected(act.stopButton, true);
+        SketchStyle.outline(act.stopButton, 2);
         act.stopButton.setVisibility(View.GONE);
         LinearLayout.LayoutParams stopLp = new LinearLayout.LayoutParams(act.dp(32), act.dp(32));
         stopLp.gravity = Gravity.CENTER_VERTICAL;
@@ -589,7 +596,7 @@ final class ChatView {
         chatTabsOverlay.setVisibility(View.GONE);
         chatTabsOverlay.setClickable(true);
         // Above the All/New chat FABs (those use elevation for drop shadow).
-        chatTabsOverlay.setElevation(act.dp(16));
+        SketchStyle.elevate(chatTabsOverlay, 16);
         chatTabsOverlay.setTranslationZ(act.dp(8));
 
         chatTabsScrim = new View(act);
@@ -668,7 +675,7 @@ final class ChatView {
             });
             act.applyIconSelected(act.chatCanvasFab, true);
             act.chatCanvasFab.setContentDescription("Open chat");
-            act.chatCanvasFab.setElevation(act.dp(12));
+            SketchStyle.elevate(act.chatCanvasFab, 12, CHAT_FAB_SHADOW_DP);
             chatCanvasFabLp = new FrameLayout.LayoutParams(act.dp(CHAT_TOGGLE_SIZE), act.dp(CHAT_TOGGLE_SIZE));
         }
         positionChatCanvasFab();
@@ -751,7 +758,7 @@ final class ChatView {
         act.conversations.refreshChatTabs();
         chatTabsOpen = true;
         chatTabsOverlay.setVisibility(View.VISIBLE);
-        chatTabsOverlay.setElevation(act.dp(16));
+        SketchStyle.elevate(chatTabsOverlay, 16);
         chatTabsOverlay.setTranslationZ(act.dp(8));
         chatTabsOverlay.bringToFront();
         if (act.chatResizeHandle != null) act.chatResizeHandle.bringToFront();
@@ -1005,11 +1012,12 @@ final class ChatView {
 
     /** Solid chat chrome with canvas-facing corners rounded to match bubble radius. */
     void refreshChatPanelBackground() {
-        float r = act.dp(MainActivity.CHAT_BG_CORNER);
+        float r = act.compactScreen() ? 0f : act.dp(MainActivity.CHAT_BG_CORNER);
         float[] radii = chatCornerRadii(r);
         GradientDrawable g = new GradientDrawable();
         g.setColor(act.M3_SURFACE_CONTAINER);
         g.setCornerRadii(radii);
+        if (!act.compactScreen()) SketchStyle.border(g, act.getResources().getDisplayMetrics().density);
         if (chatScrim != null) {
             chatScrim.setBackground(g);
         }
@@ -1048,7 +1056,7 @@ final class ChatView {
                 int w = view.getWidth();
                 int h = view.getHeight();
                 if (w <= 0 || h <= 0) return;
-                float r = act.dp(MainActivity.CHAT_BG_CORNER);
+                float r = act.compactScreen() ? 0f : act.dp(MainActivity.CHAT_BG_CORNER);
                 Path path = new Path();
                 path.addRoundRect(0, 0, w, h, chatCornerRadii(r), Path.Direction.CW);
                 outline.setPath(path);
@@ -1576,6 +1584,7 @@ final class ChatView {
                 + "r.setProperty('--error-bg'," + JSONObject.quote(errorBg) + ");"
                 + "r.setProperty('--warn-fg'," + JSONObject.quote(warnFg) + ");"
                 + "r.setProperty('--error-fg'," + JSONObject.quote(errorFg) + ");"
+                + "document.documentElement.classList.toggle('sketch'," + theme.id.startsWith("inkside-") + ");"
                 + "document.documentElement.style.background='transparent';"
                 + "document.body.style.background='transparent';"
                 + "document.body.style.color=getComputedStyle(document.documentElement).getPropertyValue('--fg');"
@@ -1675,7 +1684,7 @@ final class ChatView {
         chip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         chip.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         chip.setPadding(act.dp(14), act.dp(8), act.dp(14), act.dp(8));
-        chip.setElevation(act.dp(6));
+        SketchStyle.elevate(chip, 6);
         chip.setClickable(true);
         chip.setContentDescription("Drag the selected text onto the canvas, or tap to place it");
         final float[] down = new float[2];
@@ -1722,7 +1731,7 @@ final class ChatView {
         if (fab == null) return;
         fab.setOutlineProvider(ViewOutlineProvider.BACKGROUND);
         fab.setClipToOutline(true);
-        fab.setElevation(act.dp(4));
+        SketchStyle.elevate(fab, 4);
         fab.setTranslationZ(act.dp(2));
     }
 }

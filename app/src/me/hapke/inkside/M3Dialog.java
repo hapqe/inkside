@@ -40,9 +40,14 @@ final class M3Dialog extends Dialog {
     static int onPrimaryContainer = 0xFFE8EAF6;
     static int surfaceHighest = 0xFF31303A;
     static int outlineVariant = 0xFF49454F;
-    private static final int ERROR = 0xFFF2B8B5;
-    private static final int ERROR_CONTAINER = 0xFF8C1D18;
-    private static final int ON_ERROR_CONTAINER = 0xFFF9DEDC;
+    /**
+     * Material 3's error roles, for the dark or the light scheme by the theme's text colour:
+     * the dark scheme's pale red is barely visible on a light surface. Set by
+     * {@link #setPalette}; read by {@link M3Menu} and the rest for "Delete" and the like.
+     */
+    static int ERROR = 0xFFF2B8B5;
+    static int ERROR_CONTAINER = 0xFF8C1D18;
+    static int ON_ERROR_CONTAINER = 0xFFF9DEDC;
 
     static void setPalette(int surface, int onSurface, int onSurfaceVariant, int primary,
                            int primaryContainer, int onPrimaryContainer, int surfaceHighest,
@@ -55,6 +60,11 @@ final class M3Dialog extends Dialog {
         M3Dialog.onPrimaryContainer = onPrimaryContainer;
         M3Dialog.surfaceHighest = surfaceHighest;
         M3Dialog.outlineVariant = outlineVariant;
+        // Dark text means a light theme.
+        boolean light = android.graphics.Color.luminance(onSurface | 0xFF000000) < 0.5f;
+        ERROR = light ? 0xFFB3261E : 0xFFF2B8B5;
+        ERROR_CONTAINER = light ? 0xFFF9DEDC : 0xFF8C1D18;
+        ON_ERROR_CONTAINER = light ? 0xFF410E0B : 0xFFF9DEDC;
     }
 
     private final float density;
@@ -216,7 +226,7 @@ final class M3Dialog extends Dialog {
             bg.setColor(surface);
             bg.setStroke(Math.round(den), (outlineVariant & 0x00FFFFFF) | 0x33000000);
             col.setBackground(bg);
-            col.setElevation(6 * den);
+            SketchStyle.elevate(col, 6);
             col.setClickable(true);
 
             if (title != null) {
@@ -224,6 +234,7 @@ final class M3Dialog extends Dialog {
                 t.setText(title);
                 t.setTextColor(onSurface);
                 t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
+                HeadlineFont.apply(t);
                 t.setPadding(0, 0, 0, Math.round(16 * den));
                 col.addView(t);
             }
@@ -321,6 +332,11 @@ final class M3Dialog extends Dialog {
             root.addView(col, clp);
 
             d.setContentView(root);
+            SketchStyle.watch(root);
+            // Fields in a dialog: the card centres in what the keyboard leaves free, moving
+            // with the keyboard as it slides (the window itself is often not resized).
+            KeyboardInsets.follow(root, px -> root.setPadding(
+                    root.getPaddingLeft(), root.getPaddingTop(), root.getPaddingRight(), px));
             d.root = root;
             d.scrim = scrim;
             d.card = col;
@@ -349,6 +365,7 @@ final class M3Dialog extends Dialog {
             b.setTextColor(!filled ? (destructive ? ERROR : primary)
                     : destructive ? ON_ERROR_CONTAINER : onPrimaryContainer);
             b.setBackground(ripple(fill, 999 * den));
+            if (filled) SketchStyle.outline(b, 2);
             b.setOnClickListener(onClick);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, Math.round(40 * den));
@@ -379,6 +396,7 @@ final class M3Dialog extends Dialog {
                 f.setCornerRadius(12 * den);
                 f.setColor(surfaceHighest);
                 f.setStroke(Math.round(den), (outlineVariant & 0x00FFFFFF) | 0x66000000);
+                SketchStyle.border(f, den);
                 e.setBackground(f);
                 int p = Math.round(14 * den);
                 e.setPadding(Math.round(16 * den), p, Math.round(16 * den), p);

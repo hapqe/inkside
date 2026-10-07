@@ -113,7 +113,7 @@ final class PdfExport {
             card = new LinearLayout(act);
             card.setOrientation(LinearLayout.VERTICAL);
             act.settingsPanel.applyOptionsCardSurface(card);
-            card.setElevation(act.dp(6));
+            SketchStyle.elevate(card, 6);
             card.setClickable(true);
             card.setOnClickListener(v -> {});
             card.setClipToOutline(true);
@@ -441,6 +441,7 @@ final class PdfExport {
             progressTitle.setText("Exporting…");
             progressTitle.setTextColor(act.M3_ON_SURFACE);
             progressTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
+            HeadlineFont.apply(progressTitle);
             col.addView(progressTitle);
             TextView file = act.panelHint(cleanName() + ".pdf");
             file.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
@@ -592,6 +593,7 @@ final class PdfExport {
             title.setText("Exported");
             title.setTextColor(act.M3_ON_SURFACE);
             title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
+            HeadlineFont.apply(title);
             title.setGravity(Gravity.CENTER);
             title.setPadding(0, act.dp(MainActivity.SPACE_LG), 0, act.dp(MainActivity.SPACE_XS));
             col.addView(title);
@@ -635,12 +637,13 @@ final class PdfExport {
             col.setPadding(act.dp(MainActivity.SPACE_XL + 4), act.dp(MainActivity.SPACE_XL + 4), act.dp(MainActivity.SPACE_XL + 4), act.dp(MainActivity.SPACE_XL));
             ImageView icon = new ImageView(act);
             icon.setImageResource(R.drawable.ic_error);
-            icon.setColorFilter(0xFFF2B8B5, PorterDuff.Mode.SRC_IN);
+            icon.setColorFilter(M3Dialog.ERROR, PorterDuff.Mode.SRC_IN);
             col.addView(icon, new LinearLayout.LayoutParams(act.dp(40), act.dp(40)));
             TextView title = new TextView(act);
             title.setText("Export failed");
             title.setTextColor(act.M3_ON_SURFACE);
             title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
+            HeadlineFont.apply(title);
             title.setPadding(0, act.dp(MainActivity.SPACE_LG), 0, act.dp(MainActivity.SPACE_XS));
             col.addView(title);
             TextView why = act.panelHint(message);
@@ -667,6 +670,7 @@ final class PdfExport {
             t.setText(titleText);
             t.setTextColor(act.M3_ON_SURFACE);
             t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
+            HeadlineFont.apply(t);
             titles.addView(t);
             TextView s = act.panelHint(sub);
             s.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);

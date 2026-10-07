@@ -89,6 +89,7 @@ final class Updater {
         body.setOrientation(LinearLayout.VERTICAL);
 
         title = text(22, act.M3_ON_SURFACE, false);
+        HeadlineFont.apply(title);
         title.setText("Checking for updates…");
         body.addView(title, MainActivity.matchWrap());
         detail = text(14, act.M3_ON_SURFACE_VARIANT, false);

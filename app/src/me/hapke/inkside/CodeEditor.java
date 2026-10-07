@@ -856,6 +856,7 @@ final class CodeEditor {
         GradientDrawable g = new GradientDrawable();
         g.setColor(act.M3_SURFACE_CONTAINER);
         g.setCornerRadii(radii);
+        if (!act.compactScreen()) SketchStyle.border(g, act.getResources().getDisplayMetrics().density);
         editorScrim.setBackground(g);
         if (act.editorPanel != null) {
             act.editorPanel.setBackgroundColor(0x00000000);

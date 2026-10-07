@@ -29,9 +29,12 @@ final class PenOutline {
         return luminance(paper.getAsInt()) > 0.5 ? 0xFF202024 : 0xFFF4F4F5;
     }
 
-    /** How much wider the outline pass is than the stroke it surrounds (both sides together). */
+    /**
+     * How much narrower the stroke's colour is than the stroke when outlined (both sides
+     * together): the outline shows in that margin, so the stroke keeps its own width.
+     */
     static float strokeExtra(float width) {
-        return 0.45f + width * 0.05f;
+        return 0.6f + width * 0.12f;
     }
 
     /** Width of the line traced around the glyphs (half of it shows outside them). */

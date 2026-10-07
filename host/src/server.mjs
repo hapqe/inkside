@@ -2375,8 +2375,10 @@ app.post("/file/write-binary", async (req, res) => {
     const rel = String((req.body && req.body.path) || "");
     if (!rel) return res.status(400).json({ error: "path required" });
     let abs = assertInsideWorkspace(rel);
-    const b64 = req.body && req.body.base64 != null ? String(req.body.base64) : "";
-    if (!b64) return res.status(400).json({ error: "base64 required" });
+    // An empty file is "" — present, just empty (a fresh .viz, say), so only a missing
+    // field is an error.
+    if (req.body?.base64 == null) return res.status(400).json({ error: "base64 required" });
+    const b64 = String(req.body.base64);
     const buf = Buffer.from(b64, "base64");
     if (buf.length > 25_000_000) {
       return res.status(413).json({ error: "file too large" });

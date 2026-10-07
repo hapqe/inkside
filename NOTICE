@@ -13,6 +13,7 @@ App (Android)
 - KaTeX (Khan Academy and contributors), including its fonts — MIT License / SIL OFL for the fonts.
 - marked — MIT License.
 - mhchem (KaTeX extension) — MIT License.
+- Fraunces (Undercase Type) — headline font, SIL Open Font License 1.1 (app/assets/fonts).
 
 Host (Node)
 - Claude Agent SDK (Anthropic) — used as a dependency, under Anthropic's terms.

@@ -22,7 +22,6 @@ import java.util.List;
  * Replaces the platform PopupMenu, whose stock look matched nothing else in the app.
  */
 final class M3Menu {
-    private static final int ERROR = 0xFFF2B8B5;
     private static final int WIDTH_DP = 240;
 
     private static final class Item {
@@ -87,6 +86,7 @@ final class M3Menu {
     M3Menu showAt(View parent, float x, float y) {
         if (items.isEmpty() || parent == null || parent.getWindowToken() == null) return this;
         LinearLayout card = build();
+        SketchStyle.outline(card, 8);
         int w = dp(WIDTH_DP);
         card.measure(View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY),
                 View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
@@ -104,7 +104,7 @@ final class M3Menu {
         window = new PopupWindow(card, w, ViewGroup.LayoutParams.WRAP_CONTENT, true);
         window.setBackgroundDrawable(new ColorDrawable(0));
         window.setOutsideTouchable(true);
-        window.setElevation(dp(8));
+        window.setElevation(SketchStyle.on ? 0 : dp(8));
         window.setClippingEnabled(true);
         card.setPivotX(flipX ? w : 0);
         card.setPivotY(flipY ? h : 0);
@@ -145,7 +145,7 @@ final class M3Menu {
     }
 
     private View row(Item it) {
-        int fg = it.destructive ? ERROR : M3Dialog.onSurface;
+        int fg = it.destructive ? M3Dialog.ERROR : M3Dialog.onSurface;
         LinearLayout r = new LinearLayout(ctx);
         r.setOrientation(LinearLayout.HORIZONTAL);
         r.setGravity(Gravity.CENTER_VERTICAL);
@@ -165,7 +165,7 @@ final class M3Menu {
         if (it.icon != 0) {
             ImageView iv = new ImageView(ctx);
             iv.setImageResource(it.icon);
-            iv.setColorFilter(it.destructive ? ERROR : M3Dialog.onSurfaceVariant);
+            iv.setColorFilter(it.destructive ? M3Dialog.ERROR : M3Dialog.onSurfaceVariant);
             LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(dp(20), dp(20));
             ilp.rightMargin = dp(14);
             r.addView(iv, ilp);

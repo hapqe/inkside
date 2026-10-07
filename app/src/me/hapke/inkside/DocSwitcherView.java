@@ -172,9 +172,13 @@ final class DocSwitcherView extends View {
         int alpha = Math.round(255 * t);
         cardPaint.setColor(colorSurface);
         cardPaint.setAlpha(alpha);
-        cardPaint.setShadowLayer(dp(16), 0, dp(4), (Math.round(0x55 * t) << 24));
-        c.drawRoundRect(card, dp(24), dp(24), cardPaint);
-        cardPaint.clearShadowLayer();
+        if (SketchStyle.on) {
+            SketchStyle.drawCard(c, card, dp(24), cardPaint, alpha, getResources().getDisplayMetrics().density);
+        } else {
+            cardPaint.setShadowLayer(dp(16), 0, dp(4), (Math.round(0x55 * t) << 24));
+            c.drawRoundRect(card, dp(24), dp(24), cardPaint);
+            cardPaint.clearShadowLayer();
+        }
 
         // Highlight pill under the pointed-at row.
         float rowTop = card.top + dp(PAD_DP);

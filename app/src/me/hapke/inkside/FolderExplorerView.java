@@ -247,8 +247,10 @@ final class FolderExplorerView extends FrameLayout {
         newButton.setContentDescription("New PDF, folder or upload");
         newButton.setOnClickListener(v -> setNewMenuOpen(!newMenuOpen));
         styleNewButton();
+        // At least 34dp tall, and taller when an Inkside theme adds its border and shadow.
+        newButton.setMinimumHeight(dp(34));
         LinearLayout.LayoutParams newLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, dp(34));
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         newLp.rightMargin = dp(4);
         header.addView(newButton, newLp);
         col.addView(header, matchWrap());
@@ -411,6 +413,7 @@ final class FolderExplorerView extends FrameLayout {
         bg.setColor(colorPrimaryContainer);
         bg.setCornerRadius(dp(999));
         newButton.setBackground(ripple(bg, colorOnPrimaryContainer));
+        SketchStyle.outline(newButton, 2);
         tint(newIcon, colorOnPrimaryContainer);
         newLabel.setTextColor(colorOnPrimaryContainer);
     }
@@ -464,7 +467,7 @@ final class FolderExplorerView extends FrameLayout {
         bg.setStroke(dp(1), colorOutline);
         bg.setCornerRadius(dp(999));
         opt.setBackground(ripple(bg, colorOnSurface));
-        opt.setElevation(dp(4));
+        SketchStyle.elevate(opt, 4);
         ImageView iv = new ImageView(getContext());
         iv.setImageResource(icon);
         tint(iv, colorPrimary);
