@@ -866,6 +866,31 @@ async function main() {
     check("an access token works from any network", tokProbe("203.0.113.9", { authorization: "Bearer t0k3n" }) === 200);
     check("without it, even this computer's network is refused", tokProbe("192.168.1.5", {}) === 401);
     check("this computer itself needs the token too (a local proxy looks local)", tokProbe("127.0.0.1", {}) === 401);
+    // Testers' own tokens: each one admitted under its name; the owner's token is "owner".
+    const tdir = await fsp.mkdtemp(path.join(os.tmpdir(), "cc-testers-"));
+    const tfile = path.join(tdir, "tokens.json");
+    await fsp.writeFile(tfile, JSON.stringify({ testers: [{ name: "anna", token: "anna-token-0123456789" }] }));
+    const testerGuard = createAuth({ token: "owner-token-0123456789", tokensFile: tfile, sameNetwork: () => false });
+    const who = (tok) => {
+      const req = { headers: tok ? { authorization: `Bearer ${tok}` } : {}, socket: { remoteAddress: "203.0.113.9" } };
+      return testerGuard.refusal(req) === null ? req.tester : null;
+    };
+    check("a tester's token is let in under their name", who("anna-token-0123456789") === "anna");
+    check("the owner's token is the owner", who("owner-token-0123456789") === "owner");
+    check("an unknown token is refused", who("nobody-token-0123456789") === null && who(null) === null);
+    const onlyTesters = createAuth({ tokensFile: tfile, sameNetwork: () => true });
+    check("testers alone make tokens required", onlyTesters.tokenRequired
+      && onlyTesters.refusal({ headers: {}, socket: { remoteAddress: "192.168.1.5" } }) === "token");
+    const U = await import("../src/usage.mjs");
+    const ulog = new U.UsageLog(tdir);
+    await ulog.record({ tester: "anna", chatId: "c1", model: "sonnet",
+      result: { usage: { input_tokens: 100, output_tokens: 50 }, total_cost_usd: 0.01, duration_ms: 900, num_turns: 1 } });
+    await ulog.record({ tester: "anna", chatId: "c2", model: "sonnet",
+      result: { usage: { input_tokens: 10, output_tokens: 5 }, total_cost_usd: 0.002, duration_ms: 100, num_turns: 1 } });
+    const usage = U.summarizeUsage(path.join(tdir, "usage.jsonl"));
+    check("usage is summed per tester", usage.length === 1 && usage[0].tester === "anna"
+      && usage[0].runs === 2 && usage[0].inputTokens === 110 && Math.abs(usage[0].costUsd - 0.012) < 1e-9);
+    await fsp.rm(tdir, { recursive: true, force: true });
     const loopGuard = createAuth({ token: "t0k3n", trustLoopback: true, sameNetwork: () => false });
     let loopPassed = false;
     loopGuard.middleware({ method: "GET", path: "/files", headers: {}, socket: { remoteAddress: "127.0.0.1" } },
@@ -893,6 +918,11 @@ async function main() {
         BRIDGE_TOKEN: "s3cret-token",
         SOME_API_KEY: "must-not-reach-scripts",
         INKSIDE_STATE_DIR: path.join(ws, ".host-state-auth"),
+        // Defined (empty) so this computer's own host/.env cannot switch them for the
+        // test: a shared host's defaults are what is being checked.
+        INKSIDE_FIXED_MODEL: "",
+        INKSIDE_DICTATION: "",
+        INKSIDE_SHARED: "",
       },
       stdio: ["ignore", "pipe", "pipe"],
     });

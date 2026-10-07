@@ -1,7 +1,5 @@
 package me.hapke.inkside;
 
-import android.app.TimePickerDialog;
-import android.content.DialogInterface;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
@@ -267,29 +265,92 @@ final class StudyNext {
         });
     }
 
+    private static final int[] GOAL_MINUTE_STEPS = {0, 15, 30, 45};
+
     /**
-     * The system's clock-face picker, read as hours and minutes a week (up to 23 h 59).
-     * 0:00, or "No goal", clears it.
+     * Hours a week on a clock-face dial (1–24, outer ring 1–12, inner 13–24) plus a
+     * quarter-hour chip, all in the app's theme colours. "No goal" clears it.
      */
     private void showGoalChoices(String project, int current) {
-        int start = current > 0 ? Math.min(current, 23 * 60 + 59) : 5 * 60;
-        boolean light = luma(act.M3_SURFACE) > 140;
-        TimePickerDialog picker = new TimePickerDialog(act,
-                light ? R.style.GoalPicker_Light : R.style.GoalPicker,
-                (view, h, m) -> saveGoal(project, h * 60 + m),
-                start / 60, start % 60, true);
-        String name = project == null || project.isEmpty() ? "Outside projects" : Projects.projectDisplayName(project);
-        picker.setTitle(name + " · hours a week");
-        if (current > 0) {
-            picker.setButton(DialogInterface.BUTTON_NEUTRAL, "No goal", (d, w) -> saveGoal(project, 0));
+        final int[] minutes = {current > 0 ? current : 5 * 60};
+        LinearLayout body = new LinearLayout(act);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setGravity(Gravity.CENTER_HORIZONTAL);
+
+        TextView readout = text(40, act.M3_PRIMARY, false);
+        readout.setGravity(Gravity.CENTER);
+        TextView caption = text(13, act.M3_ON_SURFACE_VARIANT, false);
+        caption.setText("a week in " + (project == null || project.isEmpty()
+                ? "outside projects" : Projects.projectDisplayName(project)));
+        caption.setGravity(Gravity.CENTER);
+        body.addView(readout, MainActivity.matchWrap());
+        body.addView(caption, MainActivity.matchWrap());
+
+        DurationDialView dial = new DurationDialView(act);
+        dial.setColors(act.M3_SURFACE_CONTAINER_HIGHEST, act.M3_PRIMARY, act.M3_ON_PRIMARY_CONTAINER,
+                act.M3_ON_SURFACE, act.M3_ON_SURFACE_VARIANT);
+        dial.setHours(Math.max(1, Math.min(24, minutes[0] / 60)));
+        LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        dlp.topMargin = act.dp(16);
+        dlp.gravity = Gravity.CENTER_HORIZONTAL;
+        body.addView(dial, dlp);
+
+        LinearLayout chips = new LinearLayout(act);
+        chips.setOrientation(LinearLayout.HORIZONTAL);
+        chips.setGravity(Gravity.CENTER);
+        final TextView[] chipViews = new TextView[GOAL_MINUTE_STEPS.length];
+        final Runnable[] refresh = new Runnable[1];
+        for (int i = 0; i < GOAL_MINUTE_STEPS.length; i++) {
+            final int m = GOAL_MINUTE_STEPS[i];
+            TextView chip = text(14, act.M3_ON_SURFACE, true);
+            chip.setText(m == 0 ? ":00" : ":" + m);
+            chip.setGravity(Gravity.CENTER);
+            chip.setPadding(act.dp(16), act.dp(8), act.dp(16), act.dp(8));
+            chip.setOnClickListener(v -> {
+                minutes[0] = dial.getHours() * 60 + m;
+                refresh[0].run();
+            });
+            chipViews[i] = chip;
+            LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            if (i > 0) clp.leftMargin = act.dp(8);
+            chips.addView(chip, clp);
         }
-        picker.show();
-        // On a tablet in landscape the alert width left the clock in one half and empty
-        // space in the other: fit the window to the picker instead.
-        android.view.Window win = picker.getWindow();
-        if (win != null) {
-            win.setLayout(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        }
+        LinearLayout.LayoutParams chipsLp = MainActivity.matchWrap();
+        chipsLp.topMargin = act.dp(16);
+        body.addView(chips, chipsLp);
+
+        refresh[0] = () -> {
+            readout.setText(duration(minutes[0]));
+            int rest = minutes[0] % 60;
+            for (int i = 0; i < chipViews.length; i++) {
+                boolean on = GOAL_MINUTE_STEPS[i] == rest;
+                GradientDrawable bg = new GradientDrawable();
+                bg.setCornerRadius(act.dp(12));
+                if (on) {
+                    bg.setColor(act.M3_PRIMARY_CONTAINER | 0xFF000000);
+                } else {
+                    bg.setColor(0);
+                    bg.setStroke(act.dp(1), act.M3_OUTLINE_VARIANT);
+                }
+                chipViews[i].setBackground(bg);
+                chipViews[i].setTextColor(on ? act.M3_ON_PRIMARY_CONTAINER : act.M3_ON_SURFACE);
+            }
+        };
+        dial.setListener(h -> {
+            minutes[0] = h * 60 + minutes[0] % 60;
+            refresh[0].run();
+        });
+        refresh[0].run();
+
+        M3Dialog.Builder b = new M3Dialog.Builder(act)
+                .setTitle("Weekly goal")
+                .setView(body)
+                .setPositiveButton("Set", (d, w) -> saveGoal(project, minutes[0]))
+                .setNegativeButton("Cancel", null);
+        if (current > 0) b.setNeutralButton("No goal", (d, w) -> saveGoal(project, 0));
+        b.show();
     }
 
     private void saveGoal(String project, int minutes) {
@@ -307,10 +368,6 @@ final class StudyNext {
     }
 
     // ---- Small view helpers --------------------------------------------------------------
-
-    private static int luma(int c) {
-        return (int) (0.299 * ((c >> 16) & 0xFF) + 0.587 * ((c >> 8) & 0xFF) + 0.114 * (c & 0xFF));
-    }
 
     private static int kindIcon(String kind) {
         if ("review".equals(kind)) return R.drawable.ic_history;

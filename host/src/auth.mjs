@@ -14,12 +14,18 @@
  * cookie. Requests from this computer itself need it too unless BRIDGE_TRUST_LOOPBACK=1:
  * a reverse proxy on the same computer makes every request look local.
  *
+ * Testers: a tokens file (opts.tokensFile, JSON {"testers": [{"name", "token"}]}) gives
+ * each tester a token of their own, so their use can be told apart (req.tester). It is
+ * re-read when it changes, so tokens can be added or revoked without a restart. The
+ * owner's BRIDGE_TOKEN is "owner".
+ *
  * Browsers: a request carrying an Origin that is not this host's own is refused, so a web
  * page cannot drive the host from someone's browser. A request let in without a token
  * (same network, loopback, INKSIDE_OPEN) must also name the host by an address or a known
  * name, which stops DNS rebinding (a hostile name re-pointed at this computer).
  */
 import crypto from "node:crypto";
+import fs from "node:fs";
 import os from "node:os";
 import net from "node:net";
 import { clientAddress, isLoopback, isSameNetwork } from "./network.mjs";
@@ -78,10 +84,45 @@ function hostName(hostHeader) {
  */
 export function createAuth(opts = {}) {
   const token = String(opts.token || "").trim();
+  const tokensFile = opts.tokensFile ? String(opts.tokensFile) : "";
+  let testerCache = { at: 0, mtime: -1, list: [] };
+
+  /** [{name, token}] from the tokens file, re-read when it changes (checked every 2s). */
+  function testers() {
+    if (!tokensFile) return [];
+    const now = Date.now();
+    if (now - testerCache.at < 2000) return testerCache.list;
+    testerCache.at = now;
+    let mtime = 0;
+    try {
+      mtime = fs.statSync(tokensFile).mtimeMs;
+    } catch {
+      testerCache = { at: now, mtime: 0, list: [] };
+      return [];
+    }
+    if (mtime === testerCache.mtime) return testerCache.list;
+    let list = [];
+    try {
+      const o = JSON.parse(fs.readFileSync(tokensFile, "utf8"));
+      list = (Array.isArray(o?.testers) ? o.testers : [])
+        .map((t) => ({ name: String(t?.name || "").trim(), token: String(t?.token || "").trim() }))
+        .filter((t) => t.name && t.token.length >= 16 && !t.disabled);
+    } catch (e) {
+      console.warn(`tokens file unreadable (${tokensFile}): ${e?.message || e}`);
+    }
+    testerCache = { at: now, mtime, list };
+    return list;
+  }
+
+  /** Tokens are in force when the owner set one or any tester has one. */
+  function tokensInForce() {
+    return !!token || testers().length > 0;
+  }
   const open = !!opts.open;
   // With a token, loopback is not trusted unless asked for: behind a reverse proxy on
   // this computer every request arrives from 127.0.0.1.
-  const trustLoopback = token ? opts.trustLoopback === true : true;
+  const trustLoopbackOpt = opts.trustLoopback === true;
+  const trustLoopback = () => (tokensInForce() ? trustLoopbackOpt : true);
   const publicPrefixes = opts.publicPaths || [];
   const sameNetwork = opts.sameNetwork || ((addr) => isSameNetwork(addr));
   const machine = os.hostname().toLowerCase();
@@ -131,10 +172,21 @@ export function createAuth(opts = {}) {
     if (crossOrigin(req)) return "origin";
     const addr = clientAddress(req);
     let admitted;
-    if (token) {
+    if (tokensInForce()) {
       const p = presented(req);
-      if (p && safeEqual(p.value, token)) return null;
-      admitted = trustLoopback && isLoopback(addr);
+      if (p && token && safeEqual(p.value, token)) {
+        req.tester = "owner";
+        return null;
+      }
+      if (p) {
+        for (const t of testers()) {
+          if (safeEqual(p.value, t.token)) {
+            req.tester = t.name;
+            return null;
+          }
+        }
+      }
+      admitted = trustLoopback() && isLoopback(addr);
       if (!admitted) return "token";
     } else {
       admitted = open || sameNetwork(addr);
@@ -156,7 +208,7 @@ export function createAuth(opts = {}) {
     }
     const why = refusal(req);
     if (!why) {
-      const p = token ? presented(req) : null;
+      const p = tokensInForce() ? presented(req) : null;
       if (p && p.via === "query") {
         // Let the page's own relative requests (assets, fetches) authenticate too.
         res.setHeader(
@@ -179,5 +231,14 @@ export function createAuth(opts = {}) {
     return res.status(401).json({ error: "unauthorized — this host requires BRIDGE_TOKEN" });
   }
 
-  return { tokenRequired: token.length > 0, open, isAuthed, refusal, middleware };
+  return {
+    get tokenRequired() {
+      return tokensInForce();
+    },
+    open,
+    isAuthed,
+    refusal,
+    middleware,
+    testers,
+  };
 }

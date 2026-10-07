@@ -69,6 +69,10 @@ RENAME=()
 if [ -n "${DEMO_ID:-}" ]; then
     MANIFEST="$OUT/AndroidManifest.demo.xml"
     sed "s/me\.hapke\.inkside\./$DEMO_ID./g" AndroidManifest.xml > "$MANIFEST"
+    # DEMO_LABEL="Inkside Test" names the separate install in the launcher.
+    if [ -n "${DEMO_LABEL:-}" ]; then
+        sed -i '' "s/android:label=\"@string\/app_name\"/android:label=\"$DEMO_LABEL\"/g" "$MANIFEST"
+    fi
     RENAME=(--rename-manifest-package "$DEMO_ID")
 fi
 # ${a[@]+...}: macOS's bash 3.2 treats an empty array as unset under `set -u`.

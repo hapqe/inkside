@@ -122,6 +122,26 @@ separate people, run one host per person (a container or OS user each, each with
 token and workspace). For the strongest boundary, run a shared host as its own OS user
 or in a VM or container, so even a flaw in the sandbox reaches nothing of yours.
 
+### Testers and their usage
+
+Give each tester a token of their own, so you can see who used how much:
+
+```
+npm run testers -- add anna        # prints Anna's token
+npm run testers -- list
+npm run testers -- remove anna
+npm run usage                      # runs, tokens and cost per tester
+```
+
+Tokens live in `<state dir>/tokens.json` (`INKSIDE_STATE_DIR`, `--state DIR`); the host
+re-reads it when it changes, so no restart is needed. Your own `BRIDGE_TOKEN` shows up as
+`owner`. Every agent run is appended to `<log dir>/usage.jsonl` (`BRIDGE_LOG_DIR`) on this
+computer only: nothing serves it over HTTP. On a shared host the model is the one it was
+started with (`CLAUDE_MODEL`), whatever was saved before.
+
+In the app a tester only enters the token: with no address it connects to the Inkside
+test computer (`https://inkside.hapke.me`), over the internet.
+
 ## Security and operations
 
 - Only devices on this computer's network may connect (see above), or, with a token,

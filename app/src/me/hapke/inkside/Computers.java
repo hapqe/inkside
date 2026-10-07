@@ -104,22 +104,31 @@ final class Computers {
                 .show();
     }
 
+    /** Where an access token alone connects to: the Inkside test computer, over the internet. */
+    static final String TEST_COMPUTER_URL = "https://inkside.hapke.me";
+
+    /** An access token pasted where the address goes: long, and nothing like an address. */
+    private static boolean looksLikeToken(String s) {
+        return s.length() >= 20 && s.matches("[A-Za-z0-9_\\-]+") && !s.contains(".");
+    }
+
     /**
-     * Asks for the computer's address (shown when its host starts) and, if whoever runs it asked
-     * for one, an access token; then connects.
+     * Asks for an access token and, for your own computer, its address. A token alone
+     * connects to the Inkside test computer over the internet — no address, no shared
+     * network or Tailscale needed.
      */
     void showConnect() {
         LinearLayout body = new LinearLayout(act);
         body.setOrientation(LinearLayout.VERTICAL);
-        body.addView(line("Start the Inkside host on your computer and type the address it shows. "
-                + "Your tablet must be on the same network, unless the host gave you an access token.",
+        body.addView(line("Got an access token? Enter it and connect: that is all a tester needs. "
+                + "For your own computer, also type the address its host shows.",
                 M3Dialog.onSurfaceVariant, 14));
-        final android.widget.EditText address = field("192.168.1.20",
-                android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
-        final android.widget.EditText token = field("Access token (optional)",
+        final android.widget.EditText token = field("Access token",
                 android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        body.addView(address, fieldLp());
+        final android.widget.EditText address = field("Computer address (optional)",
+                android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
         body.addView(token, fieldLp());
+        body.addView(address, fieldLp());
         TextView status = line("", M3Dialog.onSurfaceVariant, 13);
         LinearLayout row = new LinearLayout(act);
         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -132,12 +141,19 @@ final class Computers {
         final M3Dialog[] dialog = new M3Dialog[1];
         View.OnClickListener go = v -> {
             String a = address.getText().toString().trim();
-            if (a.isEmpty()) {
-                status.setText("Type the computer's address.");
+            String t = token.getText().toString().trim();
+            // A token pasted into the address field: it is a token.
+            if (t.isEmpty() && looksLikeToken(a)) {
+                t = a;
+                a = "";
+            }
+            if (a.isEmpty() && t.isEmpty()) {
+                status.setText("Enter your access token.");
                 return;
             }
-            status.setText("Connecting…");
-            HostLink.connect(act, a, token.getText().toString().trim(), new HostLink.Result<PairedHosts.Host>() {
+            if (a.isEmpty()) a = TEST_COMPUTER_URL;
+            status.setText("Connecting\u2026");
+            HostLink.connect(act, a, t, new HostLink.Result<PairedHosts.Host>() {
                 @Override
                 public void onSuccess(PairedHosts.Host host) {
                     if (dialog[0] != null) dialog[0].dismiss();
@@ -160,7 +176,11 @@ final class Computers {
             go.onClick(v);
             return true;
         });
-        address.requestFocus();
+        address.setOnEditorActionListener((v, actionId, e) -> {
+            go.onClick(v);
+            return true;
+        });
+        token.requestFocus();
     }
 
     private android.widget.EditText field(String hint, int inputType) {

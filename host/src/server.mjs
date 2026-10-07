@@ -14,6 +14,7 @@ import { CanvasQueue, formatCanvasState, validateCommand } from "./canvas.mjs";
 import { StudyStore, formatStudyStats } from "./study.mjs";
 import { LearningStore, formatLearningContext, createLearningMcpServer, learningProgress, scopeKey } from "./learning.mjs";
 import { planNext, formatPlanForPrompt, pickNext } from "./planner.mjs";
+import { UsageLog } from "./usage.mjs";
 import { createAuth } from "./auth.mjs";
 import { HostIdentity } from "./identity.mjs";
 import { reachableAddresses } from "./network.mjs";
@@ -280,9 +281,13 @@ function loadAgentSettings() {
 }
 
 const savedAgentSettings = loadAgentSettings();
-let chatModel = CHAT_MODELS.includes(savedAgentSettings.model)
-  ? savedAgentSettings.model
-  : MODEL || null;
+// A fixed model (a shared host) is the one this computer was started with, whatever an
+// earlier, unlocked run may have saved.
+let chatModel = FIXED_MODEL && MODEL
+  ? MODEL
+  : CHAT_MODELS.includes(savedAgentSettings.model)
+    ? savedAgentSettings.model
+    : MODEL || null;
 const voiceModel = DEFAULT_VOICE_MODEL;
 
 async function saveAgentSettings() {
@@ -381,6 +386,8 @@ const identity = new HostIdentity({
 // Only devices on this computer's own network may connect (see auth.mjs).
 const auth = createAuth({
   token: process.env.BRIDGE_TOKEN || "",
+  // Testers' own tokens (scripts/testers.mjs), so each one's use can be told apart.
+  tokensFile: process.env.INKSIDE_TOKENS_FILE || path.join(STATE_DIR, "tokens.json"),
   open: process.env.INKSIDE_OPEN === "1",
   // With a token, this computer's own requests need it too unless this is "1".
   trustLoopback: process.env.BRIDGE_TRUST_LOOPBACK === "1",
@@ -431,6 +438,11 @@ const learningStore = new LearningStore(WORKSPACE, {
   },
 });
 const pdfIndex = new PdfIndex(WORKSPACE);
+
+/** Usage per tester, on this computer only (see usage.mjs; `npm run usage`). */
+const usageLog = new UsageLog(process.env.BRIDGE_LOG_DIR || path.join(ROOT, "logs"));
+/** Who the chat's latest turn came from: the name of the access token it carried. */
+const chatTester = new Map();
 
 /**
  * Study time is logged on the tablet; it reports this week's minutes per project when
@@ -1422,6 +1434,9 @@ async function runChatAndStream({ iter, gen, chatId, onEvent, timeoutMs, handle 
     if (isStale(chatId, gen)) return finishCancelled();
 
     const isError = Boolean(result?.is_error);
+    if (result) {
+      usageLog.record({ tester: chatTester.get(chatId) || "", chatId, model: chatModel || "", result });
+    }
     const finalText = isError ? "" : String(result?.result ?? text);
     // The result is authoritative; if it extends what we streamed, take the tail.
     if (!isError && finalText.startsWith(text) && finalText.length > text.length) {
@@ -3308,6 +3323,7 @@ async function handleChatRequest(req, res, { stream }) {
   }
 
   const id = normalizeChatId(chatId);
+  chatTester.set(id, req.tester || "");
   if (SHARED && !runsByChat.has(id) && runsByChat.size >= MAX_SHARED_RUNS) {
     return res.status(429).json({ error: "this computer is busy — try again in a minute", retryable: true });
   }

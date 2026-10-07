@@ -12,18 +12,4 @@
         <item name="android:windowDrawsSystemBarBackgrounds">true</item>
     </style>
 
-    <!--
-      The weekly goal's clock picker. The alert theme's minimum width stretched it across
-      a landscape tablet, leaving the clock in one half; this one fits its content.
-    -->
-    <style name="GoalPicker" parent="@android:style/Theme.DeviceDefault.Dialog.Alert">
-        <item name="android:windowMinWidthMajor">0dp</item>
-        <item name="android:windowMinWidthMinor">0dp</item>
-        <item name="android:colorAccent">@color/md_sys_color_primary</item>
-    </style>
-    <style name="GoalPicker.Light" parent="@android:style/Theme.DeviceDefault.Light.Dialog.Alert">
-        <item name="android:windowMinWidthMajor">0dp</item>
-        <item name="android:windowMinWidthMinor">0dp</item>
-        <item name="android:colorAccent">@color/md_sys_color_primary</item>
-    </style>
 </resources>

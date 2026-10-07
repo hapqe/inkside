@@ -71,6 +71,7 @@ public class MainActivity extends Activity implements ChatJsBridge.Host {
     final ExplorerPanel explorer = new ExplorerPanel(this);
     final Projects projects = new Projects(this);
     final StudyNext studyNext = new StudyNext(this);
+    final Updater updater = new Updater(this);
     final Stickers stickers = new Stickers(this);
     final ArtifactOverlays artifacts = new ArtifactOverlays(this);
     final Dictation dictation = new Dictation(this);

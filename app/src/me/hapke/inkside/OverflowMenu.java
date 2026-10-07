@@ -166,6 +166,13 @@ final class OverflowMenu {
             dismissOverflowMenu();
             act.settingsPanel.showOptionsMenu();
         }));
+        // A separate test install has another package: releases update the real app only.
+        if ("me.hapke.inkside".equals(act.getPackageName())) {
+            addOverflowRow(menu, overflowItem(R.drawable.ic_sync, "Update", () -> {
+                dismissOverflowMenu();
+                act.updater.show();
+            }));
+        }
         addOverflowRow(menu, overflowItem(R.drawable.ic_info, "About", () -> {
             dismissOverflowMenu();
             AboutDialog.show(act);
